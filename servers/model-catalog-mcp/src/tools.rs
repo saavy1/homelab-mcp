@@ -2,7 +2,7 @@ use homelab_mcp_core::compute_digest;
 use homelab_mcp_k8s::{DownloadJobRef, DownloadJobSpec, build_download_job, download_job_name};
 use model_catalog::{
     ApplyMode, ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, load_recipe_dir,
-    plan_deploy, render_kserve_yaml, search_recipes,
+    plan_deploy, plan_to_digest_input, render_kserve_yaml, search_recipes,
 };
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
@@ -63,12 +63,7 @@ pub struct ModelLogsParams {
 }
 
 fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), String> {
-    let mut plan_value = serde_json::to_value(plan).map_err(|e| e.to_string())?;
-    if let serde_json::Value::Object(map) = &mut plan_value {
-        map.remove("plan_digest");
-    }
-    let canonical = serde_json::to_string(&plan_value).map_err(|e| e.to_string())?;
-    let expected = compute_digest(&canonical);
+    let expected = compute_digest(&plan_to_digest_input(plan));
     if expected != provided_digest {
         return Err(format!(
             "digest mismatch: expected {}, got {}",

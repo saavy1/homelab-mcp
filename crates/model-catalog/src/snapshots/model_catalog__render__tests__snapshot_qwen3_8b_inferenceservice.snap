@@ -1,0 +1,28 @@
+---
+source: crates/model-catalog/src/render.rs
+expression: value
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  annotations:
+    homelab.saavylab.dev/model-id: Qwen/Qwen3-8B
+  labels:
+    app.kubernetes.io/managed-by: homelab-mcp
+    homelab.saavylab.dev/recipe-id: qwen3-8b
+  name: qwen3-8b
+  namespace: ai
+spec:
+  predictor:
+    maxReplicas: 1
+    minReplicas: 1
+    model:
+      modelFormat:
+        name: vllm
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          cpu: "2"
+          memory: 16Gi
+          nvidia.com/gpu: "1"

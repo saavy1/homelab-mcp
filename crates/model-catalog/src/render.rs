@@ -67,4 +67,51 @@ mod tests {
         assert!(yaml.contains("app.kubernetes.io/managed-by: homelab-mcp"));
         assert!(yaml.contains("homelab.saavylab.dev/plan-digest"));
     }
+
+    #[test]
+    fn snapshot_qwen3_8b_inferenceservice() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        // Remove the plan_digest so the snapshot is stable across code changes
+        let mut value = render_kserve_value(&plan);
+        if let Some(labels) = value
+            .get_mut("metadata")
+            .and_then(|m| m.get_mut("labels"))
+            .and_then(|l| l.as_object_mut())
+        {
+            labels.remove("homelab.saavylab.dev/plan-digest");
+        }
+        insta::assert_yaml_snapshot!(value);
+    }
+
+    #[test]
+    fn snapshot_deepseek_v4_flash_inferenceservice() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/deepseek-v4-flash.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let mut value = render_kserve_value(&plan);
+        if let Some(labels) = value
+            .get_mut("metadata")
+            .and_then(|m| m.get_mut("labels"))
+            .and_then(|l| l.as_object_mut())
+        {
+            labels.remove("homelab.saavylab.dev/plan-digest");
+        }
+        insta::assert_yaml_snapshot!(value);
+    }
 }

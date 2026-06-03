@@ -14,7 +14,7 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-insta = { version = "1.43.2", features = ["yaml"] }
+insta = { version = "1.43.2", features = ["yaml", "redactions"] }
 k8s-openapi = { version = "0.27.0", features = ["v1_34"] }
 kube = { version = "3.1.0", features = ["client", "config", "derive", "runtime"] }
 rmcp = { version = "1.7.0", features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server", "server-side-http", "tower"] }
