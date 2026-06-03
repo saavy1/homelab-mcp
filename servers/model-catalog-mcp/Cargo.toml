@@ -9,7 +9,10 @@ anyhow.workspace = true
 homelab-mcp-core = { path = "../../crates/homelab-mcp-core" }
 homelab-mcp-k8s = { path = "../../crates/homelab-mcp-k8s" }
 model-catalog = { path = "../../crates/model-catalog" }
-rmcp.workspace = true
+rmcp = { workspace = true }
+tower.workspace = true
+tower-http.workspace = true
+axum.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
