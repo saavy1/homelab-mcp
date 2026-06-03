@@ -107,6 +107,8 @@ pub fn compute_digest(canonical_json: &str) -> String {
 pub fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .json()
+        .with_target(true)
         .try_init();
 }
 
