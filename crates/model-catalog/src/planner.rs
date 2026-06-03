@@ -1,6 +1,8 @@
-use crate::{ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode};
-use homelab_mcp_core::{ToolResult, ValidationIssue};
 use crate::digest::compute_plan_digest;
+use crate::{
+    ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode,
+};
+use homelab_mcp_core::{ToolResult, ValidationIssue};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeployOverrides {
@@ -94,9 +96,10 @@ pub fn validate_fit(
         .iter()
         .filter(|n| n.roles.contains(&NodeRole::GpuWorker))
         .any(|node| {
-            node.gpu_product
-                .as_deref()
-                .is_some_and(|p| p.to_lowercase().contains(&plan.selected_gpu_class.to_lowercase()))
+            node.gpu_product.as_deref().is_some_and(|p| {
+                p.to_lowercase()
+                    .contains(&plan.selected_gpu_class.to_lowercase())
+            })
         });
     if !has_gpu_class {
         let gpu_products: Vec<String> = profile
@@ -107,12 +110,18 @@ pub fn validate_fit(
             .collect();
         issues.push(ValidationIssue {
             field: "hardware.gpu_class".into(),
-            message: format!("cluster has no GPU class matching {}", plan.selected_gpu_class),
+            message: format!(
+                "cluster has no GPU class matching {}",
+                plan.selected_gpu_class
+            ),
             allowed: Some(gpu_products.join(",")),
         });
     }
     if matches!(plan.storage_mode, StorageMode::ModelCache)
-        && profile.gpu_node().and_then(|n| n.model_path.as_deref()).is_none()
+        && profile
+            .gpu_node()
+            .and_then(|n| n.model_path.as_deref())
+            .is_none()
     {
         issues.push(ValidationIssue {
             field: "serving.storage_mode".into(),
@@ -120,9 +129,7 @@ pub fn validate_fit(
             allowed: Some("ephemeral".into()),
         });
     }
-    if recipe.model.gated.unwrap_or(false)
-        && profile.model_storage.hf_secret_name.is_empty()
-    {
+    if recipe.model.gated.unwrap_or(false) && profile.model_storage.hf_secret_name.is_empty() {
         issues.push(ValidationIssue {
             field: "model.gated".into(),
             message: "model requires gated access but no HF token secret is configured".into(),
@@ -143,7 +150,11 @@ mod tests {
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
-        let result = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty());
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        );
         assert!(result.issues.is_empty());
         assert_eq!(result.data.name, "qwen3-8b");
         assert!(!result.data.plan_digest.is_empty());
@@ -157,7 +168,11 @@ mod tests {
         ))
         .expect("recipe parses");
         let mut profile = ClusterProfile::superbloom_default();
-        if let Some(gpu_node) = profile.nodes.iter_mut().find(|n| n.roles.contains(&NodeRole::GpuWorker)) {
+        if let Some(gpu_node) = profile
+            .nodes
+            .iter_mut()
+            .find(|n| n.roles.contains(&NodeRole::GpuWorker))
+        {
             gpu_node.gpu_product = None;
         }
         let result = plan_deploy(&recipe, &profile, DeployOverrides::empty());

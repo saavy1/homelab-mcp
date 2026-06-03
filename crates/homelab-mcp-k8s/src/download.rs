@@ -13,7 +13,11 @@ pub struct DownloadJobSpec {
 
 pub fn download_job_name(model_id: &str, revision: &str) -> String {
     let sanitized = model_id.replace('/', "-").to_lowercase();
-    let rev_short = if revision.len() > 8 { &revision[..8] } else { revision };
+    let rev_short = if revision.len() > 8 {
+        &revision[..8]
+    } else {
+        revision
+    };
     format!("download-{}-{}", sanitized, rev_short)
 }
 
@@ -24,9 +28,7 @@ pub fn build_download_job(spec: &DownloadJobSpec) -> batchv1::Job {
     let download_cmd = format!(
         "pip install -q hf && hf download {} --local-dir {} --revision {} --token $HF_TOKEN && \
          echo '{{\"model_id\":\"{}\",\"revision\":\"{}\",\"downloaded_at\":\"'$(date -uIs)'\",\"source\":\"huggingface\",\"complete\":true}}' > {}",
-        spec.model_id, local_dir, spec.revision,
-        spec.model_id, spec.revision,
-        sentinel_path
+        spec.model_id, local_dir, spec.revision, spec.model_id, spec.revision, sentinel_path
     );
     let job: batchv1::Job = serde_json::from_value(json!({
         "apiVersion": "batch/v1",
@@ -79,7 +81,8 @@ pub fn build_download_job(spec: &DownloadJobSpec) -> batchv1::Job {
                 }
             }
         }
-    })).expect("download job json is valid");
+    }))
+    .expect("download job json is valid");
     job
 }
 
@@ -106,11 +109,24 @@ mod tests {
             hf_secret_namespace: "ai".into(),
         };
         let job = build_download_job(&spec);
-        assert_eq!(job.metadata.name.as_deref(), Some("download-qwen-qwen3-8b-main"));
-        let template_spec = job.spec.and_then(|s| s.template.spec).expect("template spec");
+        assert_eq!(
+            job.metadata.name.as_deref(),
+            Some("download-qwen-qwen3-8b-main")
+        );
+        let template_spec = job
+            .spec
+            .and_then(|s| s.template.spec)
+            .expect("template spec");
         let selector = template_spec.node_selector.expect("node selector");
-        assert_eq!(selector.get("kubernetes.io/hostname").map(|s| s.as_str()), Some("superbloom"));
-        let container = template_spec.containers.into_iter().next().expect("container");
+        assert_eq!(
+            selector.get("kubernetes.io/hostname").map(|s| s.as_str()),
+            Some("superbloom")
+        );
+        let container = template_spec
+            .containers
+            .into_iter()
+            .next()
+            .expect("container");
         let args: Vec<String> = container.args.into_iter().flatten().collect();
         let combined = args.join(" ");
         assert!(combined.contains("hf download"));
@@ -129,8 +145,15 @@ mod tests {
             hf_secret_namespace: "ai".into(),
         };
         let job = build_download_job(&spec);
-        let template_spec = job.spec.and_then(|s| s.template.spec).expect("template spec");
-        let container = template_spec.containers.into_iter().next().expect("container");
+        let template_spec = job
+            .spec
+            .and_then(|s| s.template.spec)
+            .expect("template spec");
+        let container = template_spec
+            .containers
+            .into_iter()
+            .next()
+            .expect("container");
         let env = container.env.into_iter().flatten().next().expect("env var");
         assert_eq!(env.name, "HF_TOKEN");
     }

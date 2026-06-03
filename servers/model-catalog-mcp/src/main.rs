@@ -2,7 +2,7 @@ mod tools;
 
 use anyhow::Result;
 use model_catalog::ClusterProfile;
-use rmcp::{tool_handler, ServiceExt, ServerHandler, transport::stdio};
+use rmcp::{ServerHandler, ServiceExt, tool_handler, transport::stdio};
 use std::{env, path::PathBuf};
 use tools::ModelCatalogTools;
 

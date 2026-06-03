@@ -1,7 +1,7 @@
 pub mod download;
 pub mod status;
 
-pub use download::{build_download_job, download_job_name, DownloadJobSpec};
+pub use download::{DownloadJobSpec, build_download_job, download_job_name};
 pub use status::{
     DownloadJobRef, DownloadStatus, KserveCondition, ModelLogs, ModelStatus, SentinelInfo,
 };
@@ -10,6 +10,6 @@ pub use status::{
 mod tests {
     #[test]
     fn crate_is_ready() {
-        assert!(true);
+        // k8s crate modules compile and re-export
     }
 }

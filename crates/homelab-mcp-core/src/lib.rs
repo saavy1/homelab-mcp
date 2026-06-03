@@ -41,7 +41,9 @@ pub struct ToolResult<T> {
 impl<T> ToolResult<T> {
     pub fn read(summary: impl Into<String>, data: T) -> Self {
         Self {
-            summary: Summary { text: summary.into() },
+            summary: Summary {
+                text: summary.into(),
+            },
             risk: RiskLevel::Read,
             data,
             issues: Vec::new(),
@@ -50,7 +52,9 @@ impl<T> ToolResult<T> {
 
     pub fn pure(summary: impl Into<String>, data: T) -> Self {
         Self {
-            summary: Summary { text: summary.into() },
+            summary: Summary {
+                text: summary.into(),
+            },
             risk: RiskLevel::Pure,
             data,
             issues: Vec::new(),
@@ -59,7 +63,9 @@ impl<T> ToolResult<T> {
 
     pub fn cluster_write(summary: impl Into<String>, data: T) -> Self {
         Self {
-            summary: Summary { text: summary.into() },
+            summary: Summary {
+                text: summary.into(),
+            },
             risk: RiskLevel::ClusterWrite,
             data,
             issues: Vec::new(),

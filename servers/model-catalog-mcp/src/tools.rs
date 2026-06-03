@@ -1,10 +1,8 @@
-use homelab_mcp_k8s::{
-    build_download_job, download_job_name, DownloadJobSpec, DownloadJobRef,
-};
 use homelab_mcp_core::compute_digest;
+use homelab_mcp_k8s::{DownloadJobRef, DownloadJobSpec, build_download_job, download_job_name};
 use model_catalog::{
-    load_recipe_dir, plan_deploy, render_kserve_yaml, search_recipes, ApplyMode,
-    ClusterProfile, DeployOverrides, DeploymentPlan, Recipe,
+    ApplyMode, ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, load_recipe_dir,
+    plan_deploy, render_kserve_yaml, search_recipes,
 };
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
@@ -89,18 +87,29 @@ impl ModelCatalogTools {
     ) -> Result<String, String> {
         let recipes = self.load_recipes().map_err(|error| error.to_string())?;
         let matches = search_recipes(&recipes, params.query.as_deref());
-        let ids: Vec<String> = matches.into_iter().map(|recipe| recipe.id.clone()).collect();
+        let ids: Vec<String> = matches
+            .into_iter()
+            .map(|recipe| recipe.id.clone())
+            .collect();
         serde_json::to_string(&ids).map_err(|error| error.to_string())
     }
 
     #[tool(description = "Show one local model recipe by id")]
-    pub fn show_recipe(&self, Parameters(params): Parameters<ShowRecipeParams>) -> Result<String, String> {
+    pub fn show_recipe(
+        &self,
+        Parameters(params): Parameters<ShowRecipeParams>,
+    ) -> Result<String, String> {
         let recipe = self.find_recipe(&params.id)?;
         serde_json::to_string(&recipe).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Plan a KServe deployment. Returns DeploymentPlan with plan_digest. Pure: no side effects.")]
-    pub fn plan_deploy(&self, Parameters(params): Parameters<PlanDeployParams>) -> Result<String, String> {
+    #[tool(
+        description = "Plan a KServe deployment. Returns DeploymentPlan with plan_digest. Pure: no side effects."
+    )]
+    pub fn plan_deploy(
+        &self,
+        Parameters(params): Parameters<PlanDeployParams>,
+    ) -> Result<String, String> {
         let recipe = self.find_recipe(&params.recipe_id)?;
         let result = plan_deploy(
             &recipe,
@@ -115,14 +124,20 @@ impl ModelCatalogTools {
         serde_json::to_string(&result).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Download model weights on NAS node if sentinel absent. Cluster write + NAS filesystem write.")]
+    #[tool(
+        description = "Download model weights on NAS node if sentinel absent. Cluster write + NAS filesystem write."
+    )]
     pub fn ensure_weights(
         &self,
         Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
         verify_digest(&params.plan, &params.plan_digest)?;
         let storage = &self.cluster_profile.model_storage;
-        let revision = params.plan.model_revision.clone().unwrap_or_else(|| "main".into());
+        let revision = params
+            .plan
+            .model_revision
+            .clone()
+            .unwrap_or_else(|| "main".into());
         let spec = DownloadJobSpec {
             model_id: params.plan.model_id.clone(),
             revision: revision.clone(),
@@ -163,7 +178,9 @@ impl ModelCatalogTools {
         serde_json::to_string(&response).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Apply a KServe InferenceService to the cluster. Default create_only. Cluster write. Refuses if sentinel absent.")]
+    #[tool(
+        description = "Apply a KServe InferenceService to the cluster. Default create_only. Cluster write. Refuses if sentinel absent."
+    )]
     pub fn apply_plan(
         &self,
         Parameters(params): Parameters<ApplyPlanParams>,
@@ -188,7 +205,10 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Return KServe model status from Kubernetes")]
-    pub fn status(&self, Parameters(params): Parameters<ModelStatusParams>) -> Result<String, String> {
+    pub fn status(
+        &self,
+        Parameters(params): Parameters<ModelStatusParams>,
+    ) -> Result<String, String> {
         let status = serde_json::json!({
             "namespace": params.namespace,
             "name": params.name,
@@ -269,8 +289,12 @@ mod tests {
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
         let data = &plan_value["data"];
-        let deploy_plan: DeploymentPlan = serde_json::from_value(data.clone()).expect("deserialize plan");
-        let digest = plan_value["data"]["plan_digest"].as_str().expect("digest").to_string();
+        let deploy_plan: DeploymentPlan =
+            serde_json::from_value(data.clone()).expect("deserialize plan");
+        let digest = plan_value["data"]["plan_digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
         let output = tools()
             .ensure_weights(Parameters(EnsureWeightsParams {
                 plan: deploy_plan,
@@ -293,7 +317,8 @@ mod tests {
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
         let data = &plan_value["data"];
-        let deploy_plan: DeploymentPlan = serde_json::from_value(data.clone()).expect("deserialize plan");
+        let deploy_plan: DeploymentPlan =
+            serde_json::from_value(data.clone()).expect("deserialize plan");
         let result = tools().apply_plan(Parameters(ApplyPlanParams {
             plan: deploy_plan,
             plan_digest: "wrong-digest".into(),

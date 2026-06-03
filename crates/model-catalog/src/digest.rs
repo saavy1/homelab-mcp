@@ -21,7 +21,7 @@ fn remove_digest_field(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_recipe_yaml, plan_deploy, ClusterProfile, DeployOverrides};
+    use crate::{ClusterProfile, DeployOverrides, parse_recipe_yaml, plan_deploy};
 
     #[test]
     fn digest_excludes_itself() {
@@ -29,7 +29,12 @@ mod tests {
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
-        let plan = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty()).data;
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
         let input = plan_to_digest_input(&plan);
         assert!(!input.contains("plan_digest"));
     }
@@ -40,7 +45,12 @@ mod tests {
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
-        let plan = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty()).data;
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
         assert_eq!(plan.plan_digest, compute_plan_digest(&plan));
     }
 }

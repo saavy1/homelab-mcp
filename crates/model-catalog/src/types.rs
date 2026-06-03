@@ -79,16 +79,11 @@ pub enum IngressPolicy {
     InternalHttp,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApplyMode {
+    #[default]
     CreateOnly,
-}
-
-impl Default for ApplyMode {
-    fn default() -> Self {
-        Self::CreateOnly
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]

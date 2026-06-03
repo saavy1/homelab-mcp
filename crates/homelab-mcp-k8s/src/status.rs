@@ -35,11 +35,23 @@ pub struct DownloadJobRef {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum DownloadStatus {
     NotStarted,
-    JobCreated { job_ref: DownloadJobRef },
-    Running { job_ref: DownloadJobRef },
-    Completed { job_ref: DownloadJobRef },
-    Failed { job_ref: DownloadJobRef, reason: String },
-    AlreadyCached { model_id: String, path: String },
+    JobCreated {
+        job_ref: DownloadJobRef,
+    },
+    Running {
+        job_ref: DownloadJobRef,
+    },
+    Completed {
+        job_ref: DownloadJobRef,
+    },
+    Failed {
+        job_ref: DownloadJobRef,
+        reason: String,
+    },
+    AlreadyCached {
+        model_id: String,
+        path: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]

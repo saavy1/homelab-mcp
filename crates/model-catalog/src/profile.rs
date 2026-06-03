@@ -103,7 +103,9 @@ impl ClusterProfile {
     }
 
     pub fn gpu_node(&self) -> Option<&NodeProfile> {
-        self.nodes.iter().find(|n| n.roles.contains(&NodeRole::GpuWorker))
+        self.nodes
+            .iter()
+            .find(|n| n.roles.contains(&NodeRole::GpuWorker))
     }
 
     pub fn nas_node(&self) -> Option<&NodeProfile> {
@@ -128,7 +130,10 @@ mod tests {
     #[test]
     fn storage_paths_differ_between_nodes() {
         let profile = ClusterProfile::superbloom_default();
-        assert_ne!(profile.model_storage.nas_path, profile.model_storage.gpu_node_path);
+        assert_ne!(
+            profile.model_storage.nas_path,
+            profile.model_storage.gpu_node_path
+        );
     }
 
     #[test]

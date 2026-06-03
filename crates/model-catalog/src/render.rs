@@ -1,6 +1,6 @@
 use crate::DeploymentPlan;
 use homelab_mcp_core::{HomelabMcpError, HomelabResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
     json!({
@@ -48,7 +48,7 @@ pub fn render_kserve_yaml(plan: &DeploymentPlan) -> HomelabResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{plan_deploy, parse_recipe_yaml, ClusterProfile, DeployOverrides};
+    use crate::{ClusterProfile, DeployOverrides, parse_recipe_yaml, plan_deploy};
 
     #[test]
     fn renders_inferenceservice_yaml_with_plan_digest() {
@@ -56,7 +56,12 @@ mod tests {
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
-        let plan = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty()).data;
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
         let yaml = render_kserve_yaml(&plan).expect("yaml renders");
         assert!(yaml.contains("kind: InferenceService"));
         assert!(yaml.contains("app.kubernetes.io/managed-by: homelab-mcp"));
