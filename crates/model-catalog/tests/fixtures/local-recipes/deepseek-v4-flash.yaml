@@ -1,0 +1,33 @@
+id: deepseek-v4-flash
+source: ad-hoc
+model:
+  id: deepseek-ai/DeepSeek-V4-Flash
+  revision: null
+  quantization: null
+  gated: false
+  license: unknown
+runtime:
+  image: vllm/vllm-openai:latest
+  args:
+    - --enable-auto-tool-choice
+  env: []
+  tensor_parallel: 1
+  max_model_len: 65536
+  dtype: bfloat16
+  tool_call_parser: null
+  reasoning_parser: null
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+  estimated_vram_gb: 96
+  gpu_memory_utilization: 0.92
+serving:
+  namespace: ai
+  service_name: deepseek-v4-flash
+  replicas: 1
+  storage_mode: model-cache
+  ingress_policy: cluster-local
+provenance:
+  source: local
+  path: argocd/clusters/superbloom/ai/vllm/recipes/deepseek-v4-flash.yaml
+  commit: null

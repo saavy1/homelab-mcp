@@ -1,7 +1,9 @@
 pub mod profile;
+pub mod recipe;
 pub mod types;
 
 pub use profile::{ClusterProfile, IngressMode, ModelStorage, NodeProfile, NodeRole, Taint};
+pub use recipe::{load_recipe_dir, load_recipe_file, parse_recipe_yaml, search_recipes};
 pub use types::{
     ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
     ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,

@@ -1,0 +1,34 @@
+id: qwen3-8b
+source: local
+model:
+  id: Qwen/Qwen3-8B
+  revision: null
+  quantization: null
+  gated: false
+  license: apache-2.0
+runtime:
+  image: vllm/vllm-openai:latest
+  args:
+    - --enable-auto-tool-choice
+    - --tool-call-parser=hermes
+  env: []
+  tensor_parallel: 1
+  max_model_len: 32768
+  dtype: bfloat16
+  tool_call_parser: hermes
+  reasoning_parser: null
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+  estimated_vram_gb: 24
+  gpu_memory_utilization: 0.9
+serving:
+  namespace: ai
+  service_name: qwen3-8b
+  replicas: 1
+  storage_mode: model-cache
+  ingress_policy: cluster-local
+provenance:
+  source: sb
+  path: argocd/clusters/superbloom/ai/vllm/recipes/qwen3-8b.yaml
+  commit: null
