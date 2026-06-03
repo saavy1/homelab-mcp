@@ -12,6 +12,7 @@ model-catalog = { path = "../../crates/model-catalog" }
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
