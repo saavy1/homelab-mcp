@@ -9,14 +9,14 @@ for models or tuning choices that are not yet stable upstream.
 Repository objective:
 
 > `homelab-mcp` turns model-serving recipes into explainable, reviewable KServe
-> GitOps changes for Superbloom.
+> deployments for Superbloom, with direct kube-rs apply and weight-download jobs.
 
 ## Motivation
 
 The homelab already has working manual KServe model deployments. The next step is
 not another custom CRD or reconciler; it is a safe operator interface that can
-search recipes, explain trade-offs, render native KServe manifests, and create
-GitOps changes for model serving.
+search recipes, explain trade-offs, render native KServe manifests, download
+weights, apply deployments, and observe status.
 
 Kubeflow is actively designing an upstream MCP focused on Kubeflow SDK/Trainer
 workflows. This design intentionally avoids duplicating that scope. It focuses on
@@ -41,8 +41,9 @@ Responsibilities:
   Flash.
 - Render native KServe `InferenceService` manifests instead of creating a custom
   model CRD.
-- Prefer GitOps output first: generate manifests and local patches rather than
-  applying live changes.
+- Apply deployments directly via `kube-rs` (create InferenceService, create
+  download Jobs) rather than requiring a GitOps round-trip for every change.
+- Download model weights via K8s Jobs on the NAS node using `hf download`.
 - Establish shared Rust crates for future custom MCPs.
 - Expose the workflow through an MCP server usable by Hermes and future agents.
 
@@ -53,6 +54,8 @@ Responsibilities:
 - Do not implement automatic model routing yet.
 - Do not require Spark Arena to be complete or authoritative for every model.
 - Do not shell out to `kubectl` for normal Kubernetes operations.
+- Do not require a GitOps commit-PR-ArgoCD round-trip for model deploy. Direct
+  apply via kube-rs is the primary path.
 
 ## Architecture
 
@@ -81,14 +84,49 @@ Model Catalog MCP
         ├── renderer
         │     └── KServe InferenceService YAML
         │
-        └── publisher
-              ├── dry-run output
-              └── local GitOps patch/diff
+        ├── deployer (kube-rs direct apply)
+        │     ├── ensure_weights → K8s Job on NAS node (hf download)
+        │     ├── download_status → Job/pod status
+        │     └── apply_plan → create InferenceService
+        │
+        └── observer (kube-rs read)
+              ├── status → InferenceService conditions, pods, events
+              └── logs → predictor pod logs
 ```
 
 The MCP is a thin Rust service. It reads recipes, resolves them into a homelab
-deployment intent, renders native KServe resources, and optionally writes GitOps
-patches. Kubernetes remains the serving control plane.
+deployment intent, renders native KServe resources, downloads weights via K8s
+Jobs on the NAS node, applies deployments directly via kube-rs, and observes
+status. Kubernetes remains the serving control plane.
+
+## Storage and download topology
+
+Superbloom is a two-node K3s cluster with asymmetric storage:
+
+```text
+Superbloom (NAS + control-plane):
+  /tank/models/     ← ZFS dataset, no node taints, runs all infra workloads
+  K3s server
+
+GX10-98a5 (DGX Spark, GPU worker):
+  /mnt/nas/models/  ← SMB mount from Superbloom over 2.5Gbps link
+  K3s agent
+  Taints: nvidia.com/gpu=true:NoSchedule, nvidia.com/gpu=true:NoExecute
+```
+
+Weight download Jobs schedule on Superbloom (no taints) via `nodeSelector:
+kubernetes.io/hostname=superbloom`. They run `hf download <model-id>
+--local-dir /tank/models/<model-id>` writing directly to local ZFS.
+
+InferenceService predictor pods schedule on the Spark (GPU taints + tolerations
+from the vLLM ClusterServingRuntime). They mount weights via `hostPath:
+/mnt/nas/models` (the SMB mount on the Spark), with `mountPath: /tank/models`
+inside the container so vLLM args don't change.
+
+The vLLM ClusterServingRuntime (already deployed via `sb` GitOps) provides the
+pod template: image, args, tolerations, nodeSelector, and volume spec. The MCP
+creates `InferenceService` resources that select this runtime by
+`modelFormat.name: vllm`.
 
 ## Rust workspace shape
 
@@ -144,11 +182,15 @@ Expected Kubernetes responsibilities:
 
 - read KServe `InferenceService` status and conditions.
 - read related pods, events, and logs for debugging context.
-- validate rendered resources where possible before creating GitOps patches.
-- keep writes GitOps-first in the initial version.
+- create download Jobs on the NAS node (Superbloom) to fetch weights via
+  `hf download`.
+- check download Job completion and pod logs.
+- create `InferenceService` resources directly via kube-rs apply.
+- validate rendered resources where possible before applying.
 
-Raw YAML is acceptable as a render artifact, but cluster observation should go
-through `kube-rs`.
+All cluster reads and writes go through `kube-rs`. Raw YAML is acceptable as a
+render artifact and for GitOps patch export, but live cluster operations must use
+typed/dynamic API clients.
 
 ## Cluster profile
 
@@ -160,13 +202,53 @@ The initial shape:
 ```rust
 ClusterProfile {
     cluster_name: String,
-    gpu_nodes: Vec<GpuNodeClass>,
-    storage_classes: Vec<String>,
+    nodes: Vec<NodeProfile>,
     default_namespace: String,
     available_serving_runtimes: Vec<String>,
     max_gpu_per_pod: u32,
     ingress_mode: IngressMode,
-    known_model_cache_paths: Vec<String>,
+    model_storage: ModelStorage,
+}
+
+NodeProfile {
+    hostname: String,
+    roles: Vec<NodeRole>,         // control-plane, gpu-worker, nas
+    gpu_product: Option<String>,  // e.g. "NVIDIA-GB10"
+    gpu_count: u32,
+    gpu_memory_gb: u32,
+    taints: Vec<Taint>,
+    model_path: Option<String>,   // /tank/models on NAS, /mnt/nas/models on GPU
+}
+
+ModelStorage {
+    nas_hostname: String,          // "superbloom" — where weights are stored
+    nas_path: String,              // "/tank/models" — ZFS dataset on NAS
+    gpu_node_path: String,         // "/mnt/nas/models" — SMB mount on GPU nodes
+    download_node_selector: String,// nodeSelector for download Jobs
+}
+```
+
+The Superbloom defaults:
+
+```text
+ClusterProfile {
+    cluster_name: "superbloom",
+    nodes: [
+        NodeProfile { hostname: "superbloom", roles: [ControlPlane, Nas],
+                      gpu: None, model_path: Some("/tank/models"),
+                      taints: [] },
+        NodeProfile { hostname: "gx10-98a5", roles: [GpuWorker],
+                      gpu_product: Some("NVIDIA-GB10"), gpu_count: 1, gpu_memory_gb: 128,
+                      model_path: Some("/mnt/nas/models"),
+                      taints: [nvidia.com/gpu=true:NoSchedule, NoExecute] },
+    ],
+    model_storage: ModelStorage {
+        nas_hostname: "superbloom",
+        nas_path: "/tank/models",
+        gpu_node_path: "/mnt/nas/models",
+        download_node_selector: "kubernetes.io/hostname=superbloom",
+    },
+    ...
 }
 ```
 
@@ -224,25 +306,27 @@ Initial tools:
 
 - `models.search_recipes(query?, source?, include_experimental?)`
 - `models.show_recipe(id)`
-- `models.compare_recipes(ids)`
-- `models.render_kserve(recipe_id, overrides?)`
 - `models.plan_deploy(recipe_id, name, namespace, overrides?)`
-- `models.write_gitops_patch(plan_id)`
-- `models.diff_plan(plan_id)`
+- `models.ensure_weights(recipe_id)` -- creates K8s Job on NAS node if weights
+  not cached, returns job name
+- `models.download_status(recipe_id)` -- checks download job completion/pod logs
+- `models.apply_plan(plan_id)` -- creates `InferenceService` via kube-rs
 - `models.status(name, namespace)`
 - `models.logs(name, namespace, tail?)`
 
 Risk model:
 
-- `search_recipes`, `show_recipe`, `compare_recipes`, `status`, and `logs` are
-  read-only.
-- `render_kserve` is pure render.
+- `search_recipes`, `show_recipe`, `status`, and `logs` are read-only.
 - `plan_deploy` is pure planning and returns a structured plan without writing to
-  disk.
-- `diff_plan` is read-only against an existing plan.
-- `write_gitops_patch` writes to the local `sb` checkout and must be explicit.
-- `open_gitops_pr` is a later remote-write tool, not part of v1.
-- Live apply is excluded.
+  disk or cluster.
+- `ensure_weights` is a local-write that creates a K8s Job on the NAS node to
+  download weights. It checks `/tank/models/<model-id>` existence first and
+  returns immediately if weights are already cached.
+- `download_status` is read-only against an existing download Job.
+- `apply_plan` is a cluster-write that creates an `InferenceService` via kube-rs.
+  It should only be called after `ensure_weights` confirms weights are present.
+- GitOps patch export (`write_gitops_patch`) is a separate explicit tool for
+  auditing or PR-based workflows, not the primary deploy path.
 
 Future tools worth adding after v1:
 
@@ -257,31 +341,34 @@ Future tools worth adding after v1:
 3. MCP shows likely recipes, including provenance and hardware assumptions.
 4. User or agent selects a recipe and optional overrides.
 5. MCP lowers the recipe to a `DeploymentIntent` and validates it against
-   `ClusterProfile`.
-6. MCP renders KServe YAML and returns an explainable dry-run plan.
-7. MCP writes a local GitOps patch only when explicitly asked.
-8. ArgoCD applies the merged change.
-9. MCP observes KServe/Kubernetes status and logs through `kube-rs`.
+   `ClusterProfile`. Returns an explainable dry-run plan.
+6. User or agent calls `ensure_weights`. MCP creates a K8s Job on the NAS node
+   (Superbloom) that runs `hf download <model-id> --local-dir /tank/models/<model-id>`
+   if weights are not already present. Returns job name.
+7. Agent polls `download_status` until the download job completes.
+8. User or agent calls `apply_plan`. MCP creates the `InferenceService` via
+   kube-rs direct apply.
+9. KServe reconciles, schedules the predictor pod on the GPU node (Spark), which
+   reads weights from hostPath `/mnt/nas/models`.
+10. MCP observes KServe/Kubernetes status and logs through `kube-rs`.
 
 ## GitOps layout
 
-The first implementation should target the existing `sb` GitOps repository and
-read local recipes from:
+Local recipes are stored in the `sb` GitOps repository:
 
 ```text
 sb/argocd/clusters/superbloom/ai/vllm/recipes/
 ```
 
-It should write generated model-serving manifests under per-model directories:
+The primary deploy path is direct kube-rs apply. For auditing or PR-based
+workflows, `write_gitops_patch` can export generated manifests under per-model
+directories:
 
 ```text
 sb/argocd/clusters/superbloom/ai/vllm/resources/<model-name>/
   inferenceservice.yaml
   kustomization.yaml
 ```
-
-The generated model directory should be wired through the existing `ai/vllm`
-kustomization.
 
 Generated resources should include labels/annotations for:
 
@@ -339,12 +426,15 @@ V1 should be intentionally small:
 2. Import/cache enough Spark Arena metadata to preserve provenance.
 3. Normalize to internal `Recipe`.
 4. Lower `Recipe` to `DeploymentIntent`.
-5. Render one known-good KServe `InferenceService`.
-6. Produce a local GitOps patch into `sb`.
-7. Read KServe status/logs with `kube-rs`.
+5. Validate fit against `ClusterProfile`.
+6. Render KServe `InferenceService` YAML.
+7. Create download Jobs on the NAS node via kube-rs (`ensure_weights`).
+8. Check download Job status (`download_status`).
+9. Apply `InferenceService` directly via kube-rs (`apply_plan`).
+10. Read KServe status/logs with `kube-rs`.
 
-No PR automation, live apply, model routing, or general Kubeflow Trainer/Pipeline
-tools in v1.
+No PR automation, GitOps-only patch mode, model routing, or general Kubeflow
+Trainer/Pipeline tools in v1.
 
 ## Implementation decisions
 
@@ -352,11 +442,16 @@ tools in v1.
   `~/dev/homelab/homelab-mcp`.
 - Shared crates are part of the first implementation, not a later cleanup.
 - Use `rmcp`/`rmcp-macros` for MCP server/tool implementation.
-- Use `kube-rs` for Kubernetes/KServe reads and future controlled writes.
+- Use `kube-rs` for Kubernetes/KServe reads and direct apply writes.
 - `sb` deploys the MCP service and stores local recipes/generated manifests.
 - Spark Arena recipes are read from a pinned clone/cache of
   `spark-arena/recipe-registry`, configured by repository URL and commit/ref.
-- The first version creates local GitOps patches only. PR automation and live
-  Kubernetes apply are out of scope.
+- Direct apply is the primary deploy path: `apply_plan` creates the
+  `InferenceService` via kube-rs. GitOps patch export is available as a
+  secondary tool for auditing or PR-based workflows.
+- Download Jobs run on the NAS node (Superbloom) using `hf download`
+  (the current Hugging Face CLI, replacing deprecated `huggingface-cli download`).
+- The vLLM ClusterServingRuntime already deployed in `sb` provides the pod
+  template. The MCP creates `InferenceService` resources that select it.
 
 These choices keep the implementation concrete without adding a custom CRD layer.
