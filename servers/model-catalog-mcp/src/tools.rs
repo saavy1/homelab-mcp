@@ -340,7 +340,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_weights_builds_download_job() {
+    async fn ensure_weights_accepts_valid_digest() {
         let plan_output = tools()
             .plan_deploy(Parameters(PlanDeployParams {
                 recipe_id: "qwen3-8b".into(),
@@ -356,20 +356,40 @@ mod tests {
             .as_str()
             .expect("digest")
             .to_string();
-        // This will try to hit the K8s API; without a cluster it'll return an error,
-        // but the digest verification and job building still happen first.
         let result = tools()
             .ensure_weights(Parameters(EnsureWeightsParams {
                 plan: deploy_plan,
                 plan_digest: digest,
             }))
             .await;
-        // Without a cluster we expect a kube API error, but not a digest mismatch
-        let is_ok = match &result {
-            Ok(s) => s.contains("created_download_job") || s.contains("already"),
-            Err(_) => true, // kube API unavailable is fine for unit test
-        };
-        assert!(result.is_err() || is_ok);
+        // Without a cluster the kube API call fails, but it must NOT be a digest error
+        match result {
+            Ok(s) => assert!(s.contains("created_download_job") || s.contains("already")),
+            Err(e) => assert!(!e.contains("digest mismatch"), "unexpected digest error: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ensure_weights_rejects_wrong_digest() {
+        let plan_output = tools()
+            .plan_deploy(Parameters(PlanDeployParams {
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
+            }))
+            .expect("plan");
+        let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
+        let data = &plan_value["data"];
+        let deploy_plan: DeploymentPlan =
+            serde_json::from_value(data.clone()).expect("deserialize plan");
+        let result = tools()
+            .ensure_weights(Parameters(EnsureWeightsParams {
+                plan: deploy_plan,
+                plan_digest: "wrong-digest".into(),
+            }))
+            .await;
+        let err = result.expect_err("should reject wrong digest");
+        assert!(err.contains("digest mismatch"), "expected digest mismatch, got: {err}");
     }
 
     #[tokio::test]

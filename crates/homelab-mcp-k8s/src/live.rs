@@ -139,7 +139,7 @@ pub async fn get_inferenceservice_status(
         .iter()
         .any(|c| c.condition_type == "Ready" && c.status == "True");
 
-    let recent_events = get_events(namespace).await.unwrap_or_default();
+    let recent_events = get_events(namespace, name).await.unwrap_or_default();
 
     Ok(ModelStatus {
         namespace: namespace.into(),
@@ -150,17 +150,19 @@ pub async fn get_inferenceservice_status(
     })
 }
 
-/// Get recent events for a namespace.
-pub async fn get_events(namespace: &str) -> Result<Vec<String>, kube::Error> {
+/// Get recent events for a specific object in a namespace.
+pub async fn get_events(namespace: &str, name: &str) -> Result<Vec<String>, kube::Error> {
     let client = k8s_client().await?;
     let events: Api<corev1::Event> = Api::namespaced(client, namespace);
-    let list = events.list(&ListParams::default().limit(20)).await?;
+    let field_selector = format!("involvedObject.name={name}");
+    let list = events
+        .list(&ListParams::default().fields(&field_selector).limit(20))
+        .await?;
     Ok(list
         .iter()
         .filter_map(|e| {
             let msg = e.message.as_ref()?;
-            let name = e.involved_object.name.as_deref().unwrap_or("unknown");
-            Some(format!("{name}: {msg}"))
+            Some(msg.clone())
         })
         .collect())
 }
