@@ -6,6 +6,11 @@ into native KServe `InferenceService` resources. Spark Arena recipes are the
 preferred reference source, but the system must also allow local ad hoc recipes
 for models or tuning choices that are not yet stable upstream.
 
+Repository objective:
+
+> `homelab-mcp` turns model-serving recipes into explainable, reviewable KServe
+> GitOps changes for Superbloom.
+
 ## Motivation
 
 The homelab already has working manual KServe model deployments. The next step is
@@ -36,8 +41,8 @@ Responsibilities:
   Flash.
 - Render native KServe `InferenceService` manifests instead of creating a custom
   model CRD.
-- Prefer GitOps output first: generate manifests and PR-ready patches rather than
-  applying live changes by default.
+- Prefer GitOps output first: generate manifests and local patches rather than
+  applying live changes.
 - Establish shared Rust crates for future custom MCPs.
 - Expose the workflow through an MCP server usable by Hermes and future agents.
 
@@ -70,14 +75,15 @@ Model Catalog MCP
         ├── resolver
         │     ├── normalize recipe metadata
         │     ├── apply local overrides
-        │     └── validate GPU/runtime constraints
+        │     ├── lower recipe to DeploymentIntent
+        │     └── validate against ClusterProfile
         │
         ├── renderer
         │     └── KServe InferenceService YAML
         │
         └── publisher
               ├── dry-run output
-              └── GitOps branch/PR patch
+              └── local GitOps patch/diff
 ```
 
 The MCP is a thin Rust service. It reads recipes, resolves them into a homelab
@@ -102,6 +108,18 @@ homelab-mcp/
 Shared crates should be extracted early because this is the first of many custom
 MCPs. The goal is to avoid copying server setup, response schemas, error
 formatting, Kubernetes access, and GitOps workflows into every future MCP.
+
+The shared crates must stay boring and tiny until a second MCP proves more
+abstraction is needed:
+
+- `homelab-mcp-core`: `ToolResult<T>`, `ToolError`, `ValidationIssue`,
+  `Summary`, `Provenance`, config loading, and tracing setup.
+- `homelab-mcp-k8s`: kube client factory, KServe `InferenceService` status
+  reader, pods/events/logs helpers, and cluster profile discovery.
+- `homelab-mcp-gitops`: repository path abstraction, write files, produce diff,
+  and optional local branch/commit helpers.
+
+Do not build a grand MCP framework in v1.
 
 ## MCP stack
 
@@ -132,6 +150,30 @@ Expected Kubernetes responsibilities:
 Raw YAML is acceptable as a render artifact, but cluster observation should go
 through `kube-rs`.
 
+## Cluster profile
+
+Validation depends on an explicit `ClusterProfile`, not ad hoc assumptions hidden
+inside render code.
+
+The initial shape:
+
+```rust
+ClusterProfile {
+    cluster_name: String,
+    gpu_nodes: Vec<GpuNodeClass>,
+    storage_classes: Vec<String>,
+    default_namespace: String,
+    available_serving_runtimes: Vec<String>,
+    max_gpu_per_pod: u32,
+    ingress_mode: IngressMode,
+    known_model_cache_paths: Vec<String>,
+}
+```
+
+The profile can start from static config and later merge in live `kube-rs`
+discovery. Its job is to make `plan_deploy` explain why a recipe appears to fit
+or not fit Superbloom.
+
 ## Recipe model
 
 The internal recipe shape should be deliberately boring:
@@ -151,6 +193,31 @@ The internal recipe shape should be deliberately boring:
 Spark Arena recipes are imported into this shape. Local recipes use the same
 shape and may either stand alone or override imported fields.
 
+## Lowering model
+
+Keep upstream recipe data separate from homelab deployment intent:
+
+```text
+Recipe -> DeploymentIntent -> KServeManifest
+```
+
+`Recipe` describes source facts and recommended runtime assumptions.
+`DeploymentIntent` describes the chosen Superbloom deployment:
+
+- `name`
+- `namespace`
+- `recipe_id`
+- `selected_gpu_class`
+- `replicas`
+- `scale_to_zero`
+- `storage_mode`
+- `ingress_policy`
+- `env_overrides`
+- `resource_requests`
+
+This boundary prevents Spark Arena's schema from leaking into the serving API and
+keeps local cluster choices explicit.
+
 ## MCP tools
 
 Initial tools:
@@ -160,16 +227,28 @@ Initial tools:
 - `models.compare_recipes(ids)`
 - `models.render_kserve(recipe_id, overrides?)`
 - `models.plan_deploy(recipe_id, name, namespace, overrides?)`
-- `models.open_gitops_pr(plan_id)`
+- `models.write_gitops_patch(plan_id)`
+- `models.diff_plan(plan_id)`
 - `models.status(name, namespace)`
 - `models.logs(name, namespace, tail?)`
 
 Risk model:
 
-- Search/show/compare/render/status/logs are read-only.
-- `plan_deploy` writes only local plan artifacts or a dry-run result.
-- `open_gitops_pr` is the first write operation and must be explicit.
-- Live apply is excluded from the first implementation.
+- `search_recipes`, `show_recipe`, `compare_recipes`, `status`, and `logs` are
+  read-only.
+- `render_kserve` is pure render.
+- `plan_deploy` is pure planning and returns a structured plan without writing to
+  disk.
+- `diff_plan` is read-only against an existing plan.
+- `write_gitops_patch` writes to the local `sb` checkout and must be explicit.
+- `open_gitops_pr` is a later remote-write tool, not part of v1.
+- Live apply is excluded.
+
+Future tools worth adding after v1:
+
+- `models.explain_fit(recipe_id, cluster_profile?)`
+- `models.validate_overrides(recipe_id, overrides)`
+- `models.smoke_test(name, namespace, prompt?)`
 
 ## Data flow
 
@@ -177,18 +256,32 @@ Risk model:
 2. MCP searches Spark Arena and local recipes.
 3. MCP shows likely recipes, including provenance and hardware assumptions.
 4. User or agent selects a recipe and optional overrides.
-5. MCP renders KServe YAML and validates it against known cluster constraints.
-6. MCP creates a GitOps patch/branch/PR for review.
-7. ArgoCD applies the merged change.
-8. MCP observes KServe/Kubernetes status and logs through `kube-rs`.
+5. MCP lowers the recipe to a `DeploymentIntent` and validates it against
+   `ClusterProfile`.
+6. MCP renders KServe YAML and returns an explainable dry-run plan.
+7. MCP writes a local GitOps patch only when explicitly asked.
+8. ArgoCD applies the merged change.
+9. MCP observes KServe/Kubernetes status and logs through `kube-rs`.
 
 ## GitOps layout
 
 The first implementation should target the existing `sb` GitOps repository and
-write model-serving manifests under
-`sb/argocd/clusters/superbloom/ai/vllm/resources/`. If the implementation needs
-per-model subdirectories, it should create them under that path and wire them
-through the existing `ai/vllm` kustomization.
+read local recipes from:
+
+```text
+sb/argocd/clusters/superbloom/ai/vllm/recipes/
+```
+
+It should write generated model-serving manifests under per-model directories:
+
+```text
+sb/argocd/clusters/superbloom/ai/vllm/resources/<model-name>/
+  inferenceservice.yaml
+  kustomization.yaml
+```
+
+The generated model directory should be wired through the existing `ai/vllm`
+kustomization.
 
 Generated resources should include labels/annotations for:
 
@@ -196,7 +289,8 @@ Generated resources should include labels/annotations for:
 - recipe source
 - upstream Spark Arena path and commit when available
 - model id/revision
-- owning agent/user context when available
+
+Avoid owning-user annotations in v1 unless a concrete audit need appears.
 
 ## Error handling
 
@@ -205,9 +299,11 @@ Tool responses should be structured for agent reasoning:
 - validation errors include the exact field and accepted range/value.
 - missing recipe errors include similar recipe suggestions.
 - render errors distinguish unsupported recipe fields from unsafe overrides.
+- fit explanations include recipe provenance, cluster profile assumptions, and
+  suggested alternatives when a recipe does not fit.
 - status/log tools include KServe conditions, pod state, recent events, and a
   concise summary.
-- PR creation failures return the branch/path/diff state so the operator can
+- local patch failures return the target path/diff state so the operator can
   recover manually.
 
 ## Testing
@@ -220,6 +316,8 @@ Unit tests:
 - render stable KServe YAML snapshots.
 - reject unsafe or invalid overrides.
 - test shared response/error helpers independently.
+- test golden explainability responses, including field paths, allowed ranges,
+  provenance, and suggested alternatives.
 
 Integration tests:
 
@@ -233,6 +331,21 @@ Cluster validation:
 - deploy one known-small recipe through the GitOps path.
 - verify ArgoCD sync, KServe readiness, pod logs, and an inference smoke test.
 
+## V1 cutline
+
+V1 should be intentionally small:
+
+1. Parse local recipe YAML from `sb`.
+2. Import/cache enough Spark Arena metadata to preserve provenance.
+3. Normalize to internal `Recipe`.
+4. Lower `Recipe` to `DeploymentIntent`.
+5. Render one known-good KServe `InferenceService`.
+6. Produce a local GitOps patch into `sb`.
+7. Read KServe status/logs with `kube-rs`.
+
+No PR automation, live apply, model routing, or general Kubeflow Trainer/Pipeline
+tools in v1.
+
 ## Implementation decisions
 
 - The first MCP lives in a new standalone Rust workspace under
@@ -243,7 +356,7 @@ Cluster validation:
 - `sb` deploys the MCP service and stores local recipes/generated manifests.
 - Spark Arena recipes are read from a pinned clone/cache of
   `spark-arena/recipe-registry`, configured by repository URL and commit/ref.
-- The first version creates GitOps patches only. Live Kubernetes apply is out of
-  scope.
+- The first version creates local GitOps patches only. PR automation and live
+  Kubernetes apply are out of scope.
 
 These choices keep the implementation concrete without adding a custom CRD layer.
