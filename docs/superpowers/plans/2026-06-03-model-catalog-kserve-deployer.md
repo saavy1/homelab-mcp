@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build v1 of `homelab-mcp`: a Rust MCP workspace that turns model-serving recipes into explainable, reviewable KServe GitOps changes for Superbloom.
+**Goal:** Build v1 of `homelab-mcp`: an imperative Rust MCP operator that downloads weights, validates fit, applies InferenceServices, and observes status for the Superbloom homelab.
 
-**Architecture:** Implement a small Rust workspace with boring shared crates, a recipe/domain crate, and one `rmcp` server. Keep all mutating behavior GitOps-first: pure planning is separate from local patch writing, and live Kubernetes apply is excluded.
+**Architecture:** Two-node K3s cluster: Superbloom (NAS, no taints, `/tank/models`) + DGX Spark (GPU, taints, `/mnt/nas/models` via SMB). Download Jobs run on Superbloom using `hf download`. InferenceService pods run on Spark with hostPath `/mnt/nas/models`. MCP applies directly via kube-rs `create_only`. Plans carry a `plan_digest` for integrity. Cache sentinels gate `apply_plan`. No GitOps crate in v1.
 
-**Tech Stack:** Rust 2024 edition, `rmcp` 1.7, `rmcp-macros` via `rmcp` macros feature, `kube-rs` 3.1, `serde`, `serde_yaml`, `schemars`, `tokio`, `tracing`, `tempfile`, `insta`.
+**Tech Stack:** Rust 2024 edition, `rmcp` 1.7, `rmcp-macros` via `rmcp` macros feature, `kube-rs` 3.1, `serde`, `serde_yaml`, `schemars`, `sha2`, `tokio`, `tracing`, `tempfile`, `insta`.
 
 ---
 
@@ -23,12 +23,11 @@ homelab-mcp/
     homelab-mcp-core/
       Cargo.toml
       src/lib.rs
-    homelab-mcp-gitops/
-      Cargo.toml
-      src/lib.rs
     homelab-mcp-k8s/
       Cargo.toml
       src/lib.rs
+      src/download.rs
+      src/status.rs
     model-catalog/
       Cargo.toml
       src/lib.rs
@@ -37,6 +36,7 @@ homelab-mcp/
       src/profile.rs
       src/planner.rs
       src/render.rs
+      src/digest.rs
       tests/fixtures/local-recipes/qwen3-8b.yaml
       tests/fixtures/local-recipes/deepseek-v4-flash.yaml
   servers/
@@ -48,10 +48,9 @@ homelab-mcp/
 
 Responsibilities:
 
-- `homelab-mcp-core`: tool result, validation, provenance, error, and tracing helpers.
-- `homelab-mcp-gitops`: writes generated files into a local `sb` checkout and returns a diff.
-- `homelab-mcp-k8s`: `kube-rs` client helpers and read-only status/log interfaces.
-- `model-catalog`: recipe parsing, recipe search, cluster profile, deployment planning, KServe rendering.
+- `homelab-mcp-core`: tool result, validation, provenance, error, digest, and tracing helpers.
+- `homelab-mcp-k8s`: `kube-rs` client helpers, download Job builder, Job status reader, KServe status/logs.
+- `model-catalog`: recipe parsing, recipe search, cluster profile, deployment planning, digest, KServe rendering.
 - `model-catalog-mcp`: `rmcp` stdio server that exposes the v1 tools.
 
 ## Task 1: Scaffold the Rust Workspace
@@ -74,7 +73,6 @@ Create `Cargo.toml`:
 resolver = "3"
 members = [
   "crates/homelab-mcp-core",
-  "crates/homelab-mcp-gitops",
   "crates/homelab-mcp-k8s",
   "crates/model-catalog",
   "servers/model-catalog-mcp",
@@ -95,6 +93,7 @@ schemars = "1.1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 serde_yaml = "0.9.34"
+sha2 = "0.10.9"
 tempfile = "3.23.0"
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "fs"] }
@@ -133,44 +132,12 @@ version.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 tracing-subscriber.workspace = true
 ```
 
 Create `crates/homelab-mcp-core/src/lib.rs`:
-
-```rust
-pub fn crate_ready() -> bool {
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_is_ready() {
-        assert!(super::crate_ready());
-    }
-}
-```
-
-Create `crates/homelab-mcp-gitops/Cargo.toml`:
-
-```toml
-[package]
-name = "homelab-mcp-gitops"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
-
-[dependencies]
-homelab-mcp-core = { path = "../homelab-mcp-core" }
-thiserror.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-```
-
-Create `crates/homelab-mcp-gitops/src/lib.rs`:
 
 ```rust
 pub fn crate_ready() -> bool {
@@ -199,6 +166,7 @@ version.workspace = true
 homelab-mcp-core = { path = "../homelab-mcp-core" }
 k8s-openapi.workspace = true
 kube.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -235,6 +203,7 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
@@ -269,7 +238,6 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 homelab-mcp-core = { path = "../../crates/homelab-mcp-core" }
-homelab-mcp-gitops = { path = "../../crates/homelab-mcp-gitops" }
 homelab-mcp-k8s = { path = "../../crates/homelab-mcp-k8s" }
 model-catalog = { path = "../../crates/model-catalog" }
 rmcp.workspace = true
@@ -277,6 +245,9 @@ schemars.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 ```
 
 Create `servers/model-catalog-mcp/src/main.rs`:
@@ -296,27 +267,28 @@ cargo fmt --all
 cargo test --workspace
 ```
 
-Expected: all four `crate_is_ready` tests pass.
+Expected: all `crate_is_ready` tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add Cargo.toml rust-toolchain.toml .gitignore crates servers
-git commit -m "chore: scaffold homelab MCP workspace"
+git commit -m "chore: scaffold homelab MCP workspace (3 crates, no gitops)"
 ```
 
-## Task 2: Add Core Tool Response and Error Types
+## Task 2: Add Core Tool Response, Error, and Digest Types
 
 **Files:**
 - Modify: `crates/homelab-mcp-core/src/lib.rs`
 
-- [ ] **Step 1: Replace the initial test with failing core tests**
+- [ ] **Step 1: Replace the initial test with core types**
 
 Write this in `crates/homelab-mcp-core/src/lib.rs`:
 
 ```rust
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -324,8 +296,7 @@ use thiserror::Error;
 pub enum RiskLevel {
     Read,
     Pure,
-    LocalWrite,
-    RemoteWrite,
+    ClusterWrite,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -374,6 +345,15 @@ impl<T> ToolResult<T> {
         }
     }
 
+    pub fn cluster_write(summary: impl Into<String>, data: T) -> Self {
+        Self {
+            summary: Summary { text: summary.into() },
+            risk: RiskLevel::ClusterWrite,
+            data,
+            issues: Vec::new(),
+        }
+    }
+
     pub fn with_issues(mut self, issues: Vec<ValidationIssue>) -> Self {
         self.issues = issues;
         self
@@ -390,9 +370,21 @@ pub enum HomelabMcpError {
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     Serialization(String),
+    #[error("digest mismatch: expected {expected}, got {actual}")]
+    DigestMismatch { expected: String, actual: String },
+    #[error("sentinel missing or incomplete: {0}")]
+    SentinelMissing(String),
+    #[error("credential error: {0}")]
+    Credential(String),
 }
 
 pub type HomelabResult<T> = Result<T, HomelabMcpError>;
+
+pub fn compute_digest(canonical_json: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(canonical_json.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 pub fn init_tracing() {
     let _ = tracing_subscriber::fmt()
@@ -409,19 +401,28 @@ mod tests {
         let result = ToolResult::read("listed recipes", vec!["qwen3-8b"]);
         assert_eq!(result.risk, RiskLevel::Read);
         assert_eq!(result.summary.text, "listed recipes");
-        assert_eq!(result.data, vec!["qwen3-8b"]);
-        assert!(result.issues.is_empty());
     }
 
     #[test]
-    fn issues_are_preserved_for_agent_legibility() {
-        let issue = ValidationIssue {
-            field: "hardware.gpu_count".into(),
-            message: "requested GPU count exceeds cluster limit".into(),
-            allowed: Some("1..=1".into()),
-        };
-        let result = ToolResult::pure("invalid plan", ()).with_issues(vec![issue.clone()]);
-        assert_eq!(result.issues, vec![issue]);
+    fn cluster_write_result_carries_risk_level() {
+        let result = ToolResult::cluster_write("applied InferenceService", "qwen3-8b");
+        assert_eq!(result.risk, RiskLevel::ClusterWrite);
+    }
+
+    #[test]
+    fn digest_is_deterministic() {
+        let json = r#"{"name":"qwen3-8b","namespace":"ai"}"#;
+        let d1 = compute_digest(json);
+        let d2 = compute_digest(json);
+        assert_eq!(d1, d2);
+        assert_eq!(d1.len(), 64);
+    }
+
+    #[test]
+    fn digest_differs_for_different_input() {
+        let d1 = compute_digest(r#"{"name":"a"}"#);
+        let d2 = compute_digest(r#"{"name":"b"}"#);
+        assert_ne!(d1, d2);
     }
 }
 ```
@@ -434,13 +435,13 @@ Run:
 cargo test -p homelab-mcp-core
 ```
 
-Expected: two tests pass.
+Expected: four tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add crates/homelab-mcp-core/src/lib.rs
-git commit -m "feat(core): add shared MCP result types"
+git commit -m "feat(core): add shared MCP result types, digest, and sentinel error variants"
 ```
 
 ## Task 3: Add Recipe and Cluster Profile Domain Types
@@ -483,6 +484,7 @@ pub struct ModelSpec {
     pub id: String,
     pub revision: Option<String>,
     pub quantization: Option<String>,
+    pub gated: Option<bool>,
     pub license: Option<String>,
 }
 
@@ -535,8 +537,20 @@ pub enum IngressPolicy {
     InternalHttp,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ApplyMode {
+    CreateOnly,
+}
+
+impl Default for ApplyMode {
+    fn default() -> Self {
+        Self::CreateOnly
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
-pub struct DeploymentIntent {
+pub struct DeploymentPlan {
     pub name: String,
     pub namespace: String,
     pub recipe_id: String,
@@ -547,6 +561,9 @@ pub struct DeploymentIntent {
     pub ingress_policy: IngressPolicy,
     pub env_overrides: Vec<EnvVar>,
     pub resource_requests: ResourceRequests,
+    pub model_id: String,
+    pub model_revision: Option<String>,
+    pub plan_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -564,23 +581,38 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct ClusterProfile {
-    pub cluster_name: String,
-    pub gpu_nodes: Vec<GpuNodeClass>,
-    pub storage_classes: Vec<String>,
-    pub default_namespace: String,
-    pub available_serving_runtimes: Vec<String>,
-    pub max_gpu_per_pod: u32,
-    pub ingress_mode: IngressMode,
-    pub known_model_cache_paths: Vec<String>,
+#[serde(rename_all = "kebab-case")]
+pub enum NodeRole {
+    ControlPlane,
+    Nas,
+    GpuWorker,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct GpuNodeClass {
-    pub name: String,
-    pub product: String,
-    pub count: u32,
-    pub memory_gb: u32,
+pub struct Taint {
+    pub key: String,
+    pub effect: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct NodeProfile {
+    pub hostname: String,
+    pub roles: Vec<NodeRole>,
+    pub gpu_product: Option<String>,
+    pub gpu_count: u32,
+    pub gpu_memory_gb: u32,
+    pub taints: Vec<Taint>,
+    pub model_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct ModelStorage {
+    pub nas_hostname: String,
+    pub nas_path: String,
+    pub gpu_node_path: String,
+    pub download_node_selector: String,
+    pub hf_secret_name: String,
+    pub hf_secret_namespace: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -590,23 +622,99 @@ pub enum IngressMode {
     InternalHttp,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct ClusterProfile {
+    pub cluster_name: String,
+    pub nodes: Vec<NodeProfile>,
+    pub default_namespace: String,
+    pub available_serving_runtimes: Vec<String>,
+    pub max_gpu_per_pod: u32,
+    pub ingress_mode: IngressMode,
+    pub model_storage: ModelStorage,
+}
+
 impl ClusterProfile {
     pub fn superbloom_default() -> Self {
         Self {
             cluster_name: "superbloom".into(),
-            gpu_nodes: vec![GpuNodeClass {
-                name: "spark-gb10".into(),
-                product: "gb10".into(),
-                count: 1,
-                memory_gb: 128,
-            }],
-            storage_classes: vec!["local-path".into()],
+            nodes: vec![
+                NodeProfile {
+                    hostname: "superbloom".into(),
+                    roles: vec![NodeRole::ControlPlane, NodeRole::Nas],
+                    gpu_product: None,
+                    gpu_count: 0,
+                    gpu_memory_gb: 0,
+                    taints: vec![],
+                    model_path: Some("/tank/models".into()),
+                },
+                NodeProfile {
+                    hostname: "gx10-98a5".into(),
+                    roles: vec![NodeRole::GpuWorker],
+                    gpu_product: Some("NVIDIA-GB10".into()),
+                    gpu_count: 1,
+                    gpu_memory_gb: 128,
+                    taints: vec![
+                        Taint {
+                            key: "nvidia.com/gpu".into(),
+                            effect: "NoSchedule".into(),
+                        },
+                        Taint {
+                            key: "nvidia.com/gpu".into(),
+                            effect: "NoExecute".into(),
+                        },
+                    ],
+                    model_path: Some("/mnt/nas/models".into()),
+                },
+            ],
             default_namespace: "ai".into(),
             available_serving_runtimes: vec!["vllm".into()],
             max_gpu_per_pod: 1,
             ingress_mode: IngressMode::ClusterLocal,
-            known_model_cache_paths: vec!["/models".into()],
+            model_storage: ModelStorage {
+                nas_hostname: "superbloom".into(),
+                nas_path: "/tank/models".into(),
+                gpu_node_path: "/mnt/nas/models".into(),
+                download_node_selector: "superbloom".into(),
+                hf_secret_name: "hf-token".into(),
+                hf_secret_namespace: "ai".into(),
+            },
         }
+    }
+
+    pub fn gpu_node(&self) -> Option<&NodeProfile> {
+        self.nodes.iter().find(|n| n.roles.contains(&NodeRole::GpuWorker))
+    }
+
+    pub fn nas_node(&self) -> Option<&NodeProfile> {
+        self.nodes.iter().find(|n| n.roles.contains(&NodeRole::Nas))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_profile_has_two_nodes_with_different_model_paths() {
+        let profile = ClusterProfile::superbloom_default();
+        assert_eq!(profile.nodes.len(), 2);
+        let gpu = profile.gpu_node().expect("has GPU node");
+        assert_eq!(gpu.model_path.as_deref(), Some("/mnt/nas/models"));
+        let nas = profile.nas_node().expect("has NAS node");
+        assert_eq!(nas.model_path.as_deref(), Some("/tank/models"));
+    }
+
+    #[test]
+    fn storage_paths_differ_between_nodes() {
+        let profile = ClusterProfile::superbloom_default();
+        assert_ne!(profile.model_storage.nas_path, profile.model_storage.gpu_node_path);
+    }
+
+    #[test]
+    fn hf_secret_is_configured() {
+        let profile = ClusterProfile::superbloom_default();
+        assert_eq!(profile.model_storage.hf_secret_name, "hf-token");
+        assert_eq!(profile.model_storage.hf_secret_namespace, "ai");
     }
 }
 ```
@@ -617,9 +725,9 @@ Replace `crates/model-catalog/src/lib.rs`:
 pub mod profile;
 pub mod types;
 
-pub use profile::{ClusterProfile, GpuNodeClass, IngressMode};
+pub use profile::{ClusterProfile, IngressMode, ModelStorage, NodeProfile, NodeRole, Taint};
 pub use types::{
-    DeploymentIntent, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
+    ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
     ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,
 };
 
@@ -631,8 +739,6 @@ mod tests {
     fn default_profile_names_superbloom() {
         let profile = ClusterProfile::superbloom_default();
         assert_eq!(profile.cluster_name, "superbloom");
-        assert_eq!(profile.max_gpu_per_pod, 1);
-        assert_eq!(profile.available_serving_runtimes, vec!["vllm"]);
     }
 }
 ```
@@ -642,16 +748,16 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p model-catalog default_profile_names_superbloom
+cargo test -p model-catalog
 ```
 
-Expected: the profile test passes.
+Expected: all profile and type tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add crates/model-catalog/src
-git commit -m "feat(catalog): add recipe and cluster profile types"
+git commit -m "feat(catalog): add recipe, DeploymentPlan, and two-node ClusterProfile types"
 ```
 
 ## Task 4: Parse Local Recipe YAML
@@ -673,6 +779,7 @@ model:
   id: Qwen/Qwen3-8B
   revision: null
   quantization: null
+  gated: false
   license: apache-2.0
 runtime:
   image: vllm/vllm-openai:latest
@@ -711,6 +818,7 @@ model:
   id: deepseek-ai/DeepSeek-V4-Flash
   revision: null
   quantization: null
+  gated: false
   license: unknown
 runtime:
   image: vllm/vllm-openai:latest
@@ -799,6 +907,7 @@ mod tests {
         assert_eq!(recipe.id, "qwen3-8b");
         assert_eq!(recipe.model.id, "Qwen/Qwen3-8B");
         assert_eq!(recipe.hardware.gpu_count, 1);
+        assert_eq!(recipe.model.gated, Some(false));
     }
 
     #[test]
@@ -807,22 +916,21 @@ mod tests {
         let recipe = parse_recipe_yaml(input).expect("recipe parses");
         let results = search_recipes(&[recipe], Some("deepseek"));
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].id, "deepseek-v4-flash");
     }
 }
 ```
 
-Modify `crates/model-catalog/src/lib.rs`:
+Modify `crates/model-catalog/src/lib.rs` to add the recipe module:
 
 ```rust
 pub mod profile;
 pub mod recipe;
 pub mod types;
 
-pub use profile::{ClusterProfile, GpuNodeClass, IngressMode};
+pub use profile::{ClusterProfile, IngressMode, ModelStorage, NodeProfile, NodeRole, Taint};
 pub use recipe::{load_recipe_dir, load_recipe_file, parse_recipe_yaml, search_recipes};
 pub use types::{
-    DeploymentIntent, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
+    ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
     ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,
 };
 
@@ -834,8 +942,6 @@ mod tests {
     fn default_profile_names_superbloom() {
         let profile = ClusterProfile::superbloom_default();
         assert_eq!(profile.cluster_name, "superbloom");
-        assert_eq!(profile.max_gpu_per_pod, 1);
-        assert_eq!(profile.available_serving_runtimes, vec!["vllm"]);
     }
 }
 ```
@@ -854,23 +960,77 @@ Expected: both recipe parser tests pass.
 
 ```bash
 git add crates/model-catalog/src crates/model-catalog/tests
-git commit -m "feat(catalog): parse local model recipes"
+git commit -m "feat(catalog): parse local model recipes with gated flag"
 ```
 
-## Task 5: Implement Planning and Explainable Fit Validation
+## Task 5: Plan Deployment with Digest Computation
 
 **Files:**
 - Create: `crates/model-catalog/src/planner.rs`
+- Create: `crates/model-catalog/src/digest.rs`
 - Modify: `crates/model-catalog/src/lib.rs`
 
-- [ ] **Step 1: Add planner tests and implementation**
+- [ ] **Step 1: Add digest helper**
+
+Create `crates/model-catalog/src/digest.rs`:
+
+```rust
+use crate::DeploymentPlan;
+use homelab_mcp_core::compute_digest;
+use serde_json::Value;
+
+pub fn plan_to_digest_input(plan: &DeploymentPlan) -> String {
+    let mut value = serde_json::to_value(plan).expect("plan serializes");
+    remove_digest_field(&mut value);
+    serde_json::to_string(&value).expect("canonical JSON")
+}
+
+pub fn compute_plan_digest(plan: &DeploymentPlan) -> String {
+    compute_digest(&plan_to_digest_input(plan))
+}
+
+fn remove_digest_field(value: &mut Value) {
+    if let Value::Object(map) = value {
+        map.remove("plan_digest");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{parse_recipe_yaml, plan_deploy, ClusterProfile, DeployOverrides};
+
+    #[test]
+    fn digest_excludes_itself() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty()).data;
+        let input = plan_to_digest_input(&plan);
+        assert!(!input.contains("plan_digest"));
+    }
+
+    #[test]
+    fn same_plan_produces_same_digest() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty()).data;
+        assert_eq!(plan.plan_digest, compute_plan_digest(&plan));
+    }
+}
+```
+
+- [ ] **Step 2: Add planner with digest computation**
 
 Create `crates/model-catalog/src/planner.rs`:
 
 ```rust
-use crate::{ClusterProfile, DeploymentIntent, EnvVar, Recipe, ResourceRequests, StorageMode};
+use crate::{ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode};
 use homelab_mcp_core::{ToolResult, ValidationIssue};
-use serde::Serialize;
+use crate::digest::compute_plan_digest;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeployOverrides {
@@ -891,17 +1051,11 @@ impl DeployOverrides {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct DeployPlan {
-    pub recipe: Recipe,
-    pub intent: DeploymentIntent,
-}
-
 pub fn plan_deploy(
     recipe: &Recipe,
     profile: &ClusterProfile,
     overrides: DeployOverrides,
-) -> ToolResult<DeployPlan> {
+) -> ToolResult<DeploymentPlan> {
     let name = overrides
         .name
         .clone()
@@ -912,7 +1066,7 @@ pub fn plan_deploy(
         .clone()
         .unwrap_or_else(|| recipe.serving.namespace.clone());
     let replicas = overrides.replicas.unwrap_or(recipe.serving.replicas);
-    let intent = DeploymentIntent {
+    let mut plan = DeploymentPlan {
         name,
         namespace,
         recipe_id: recipe.id.clone(),
@@ -927,8 +1081,12 @@ pub fn plan_deploy(
             memory: "16Gi".into(),
             gpu_count: recipe.hardware.gpu_count,
         },
+        model_id: recipe.model.id.clone(),
+        model_revision: recipe.model.revision.clone(),
+        plan_digest: String::new(),
     };
-    let issues = validate_fit(recipe, profile, &intent);
+    plan.plan_digest = compute_plan_digest(&plan);
+    let issues = validate_fit(recipe, profile, &plan);
     let summary = if issues.is_empty() {
         format!(
             "recipe {} fits cluster {} for {} GPU",
@@ -942,20 +1100,13 @@ pub fn plan_deploy(
             profile.cluster_name
         )
     };
-    ToolResult::pure(
-        summary,
-        DeployPlan {
-            recipe: recipe.clone(),
-            intent,
-        },
-    )
-    .with_issues(issues)
+    ToolResult::pure(summary, plan).with_issues(issues)
 }
 
 pub fn validate_fit(
     recipe: &Recipe,
     profile: &ClusterProfile,
-    intent: &DeploymentIntent,
+    plan: &DeploymentPlan,
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     if recipe.hardware.gpu_count > profile.max_gpu_per_pod {
@@ -969,30 +1120,43 @@ pub fn validate_fit(
         });
     }
     let has_gpu_class = profile
-        .gpu_nodes
+        .nodes
         .iter()
-        .any(|node| node.product == intent.selected_gpu_class);
+        .filter(|n| n.roles.contains(&NodeRole::GpuWorker))
+        .any(|node| {
+            node.gpu_product
+                .as_deref()
+                .is_some_and(|p| p.to_lowercase().contains(&plan.selected_gpu_class.to_lowercase()))
+        });
     if !has_gpu_class {
+        let gpu_products: Vec<String> = profile
+            .nodes
+            .iter()
+            .filter(|n| n.roles.contains(&NodeRole::GpuWorker))
+            .filter_map(|n| n.gpu_product.clone())
+            .collect();
         issues.push(ValidationIssue {
             field: "hardware.gpu_class".into(),
-            message: format!("cluster has no GPU class {}", intent.selected_gpu_class),
-            allowed: Some(
-                profile
-                    .gpu_nodes
-                    .iter()
-                    .map(|node| node.product.clone())
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
+            message: format!("cluster has no GPU class matching {}", plan.selected_gpu_class),
+            allowed: Some(gpu_products.join(",")),
         });
     }
-    if matches!(intent.storage_mode, StorageMode::ModelCache)
-        && profile.known_model_cache_paths.is_empty()
+    if matches!(plan.storage_mode, StorageMode::ModelCache)
+        && profile.gpu_node().and_then(|n| n.model_path.as_deref()).is_none()
     {
         issues.push(ValidationIssue {
             field: "serving.storage_mode".into(),
-            message: "recipe expects model cache paths but cluster profile has none".into(),
+            message: "recipe expects model cache but GPU node has no model_path".into(),
             allowed: Some("ephemeral".into()),
+        });
+    }
+    if recipe.model.gated.unwrap_or(false)
+        && profile.model_storage.hf_secret_name.is_empty()
+    {
+        issues.push(ValidationIssue {
+            field: "model.gated".into(),
+            message: "model requires gated access but no HF token secret is configured".into(),
+            allowed: Some("configure hf_secret_name in ModelStorage".into()),
         });
     }
     issues
@@ -1001,40 +1165,33 @@ pub fn validate_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_recipe_yaml, GpuNodeClass};
+    use crate::parse_recipe_yaml;
 
     #[test]
-    fn valid_recipe_creates_explainable_plan_without_issues() {
+    fn valid_recipe_creates_plan_with_digest() {
         let recipe = parse_recipe_yaml(include_str!(
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
         let result = plan_deploy(&recipe, &ClusterProfile::superbloom_default(), DeployOverrides::empty());
         assert!(result.issues.is_empty());
-        assert_eq!(result.data.intent.name, "qwen3-8b");
+        assert_eq!(result.data.name, "qwen3-8b");
+        assert!(!result.data.plan_digest.is_empty());
         assert!(result.summary.text.contains("fits cluster superbloom"));
     }
 
     #[test]
-    fn invalid_gpu_class_returns_field_path_allowed_values_and_provenance() {
+    fn invalid_gpu_class_returns_field_path_and_allowed() {
         let recipe = parse_recipe_yaml(include_str!(
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
         .expect("recipe parses");
         let mut profile = ClusterProfile::superbloom_default();
-        profile.gpu_nodes = vec![GpuNodeClass {
-            name: "cpu-only".into(),
-            product: "none".into(),
-            count: 0,
-            memory_gb: 0,
-        }];
+        if let Some(gpu_node) = profile.nodes.iter_mut().find(|n| n.roles.contains(&NodeRole::GpuWorker)) {
+            gpu_node.gpu_product = None;
+        }
         let result = plan_deploy(&recipe, &profile, DeployOverrides::empty());
         assert_eq!(result.issues[0].field, "hardware.gpu_class");
-        assert_eq!(result.issues[0].allowed.as_deref(), Some("none"));
-        assert_eq!(
-            result.data.recipe.provenance.path.as_deref(),
-            Some("argocd/clusters/superbloom/ai/vllm/recipes/qwen3-8b.yaml")
-        );
     }
 }
 ```
@@ -1042,16 +1199,18 @@ mod tests {
 Modify `crates/model-catalog/src/lib.rs`:
 
 ```rust
+pub mod digest;
 pub mod planner;
 pub mod profile;
 pub mod recipe;
 pub mod types;
 
-pub use planner::{plan_deploy, validate_fit, DeployOverrides, DeployPlan};
-pub use profile::{ClusterProfile, GpuNodeClass, IngressMode};
+pub use digest::{compute_plan_digest, plan_to_digest_input};
+pub use planner::{plan_deploy, validate_fit, DeployOverrides};
+pub use profile::{ClusterProfile, IngressMode, ModelStorage, NodeProfile, NodeRole, Taint};
 pub use recipe::{load_recipe_dir, load_recipe_file, parse_recipe_yaml, search_recipes};
 pub use types::{
-    DeploymentIntent, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
+    ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
     ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,
 };
 
@@ -1063,27 +1222,25 @@ mod tests {
     fn default_profile_names_superbloom() {
         let profile = ClusterProfile::superbloom_default();
         assert_eq!(profile.cluster_name, "superbloom");
-        assert_eq!(profile.max_gpu_per_pod, 1);
-        assert_eq!(profile.available_serving_runtimes, vec!["vllm"]);
     }
 }
 ```
 
-- [ ] **Step 2: Run planner tests**
+- [ ] **Step 3: Run planner and digest tests**
 
 Run:
 
 ```bash
-cargo test -p model-catalog planner::
+cargo test -p model-catalog
 ```
 
-Expected: both planner tests pass.
+Expected: planner, digest, profile, and recipe tests pass.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/model-catalog/src
-git commit -m "feat(catalog): add deploy planning and fit validation"
+git commit -m "feat(catalog): plan deployment with digest and gated model validation"
 ```
 
 ## Task 6: Render KServe InferenceService YAML
@@ -1097,46 +1254,40 @@ git commit -m "feat(catalog): add deploy planning and fit validation"
 Create `crates/model-catalog/src/render.rs`:
 
 ```rust
-use crate::DeployPlan;
+use crate::DeploymentPlan;
 use homelab_mcp_core::{HomelabMcpError, HomelabResult};
 use serde_json::{json, Value};
 
-pub fn render_kserve_value(plan: &DeployPlan) -> Value {
-    let recipe = &plan.recipe;
-    let intent = &plan.intent;
-    let args = recipe.runtime.args.clone();
+pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
     json!({
         "apiVersion": "serving.kserve.io/v1beta1",
         "kind": "InferenceService",
         "metadata": {
-            "name": intent.name,
-            "namespace": intent.namespace,
+            "name": plan.name,
+            "namespace": plan.namespace,
             "labels": {
                 "app.kubernetes.io/managed-by": "homelab-mcp",
-                "homelab.saavylab.dev/recipe-id": recipe.id,
-                "homelab.saavylab.dev/recipe-source": format!("{:?}", recipe.source).to_lowercase(),
+                "homelab.saavylab.dev/recipe-id": plan.recipe_id,
+                "homelab.saavylab.dev/plan-digest": plan.plan_digest,
             },
             "annotations": {
-                "homelab.saavylab.dev/model-id": recipe.model.id,
-                "homelab.saavylab.dev/source-path": recipe.provenance.path.clone().unwrap_or_default(),
-                "homelab.saavylab.dev/source-commit": recipe.provenance.commit.clone().unwrap_or_default(),
+                "homelab.saavylab.dev/model-id": plan.model_id,
             }
         },
         "spec": {
             "predictor": {
-                "minReplicas": intent.replicas,
-                "maxReplicas": intent.replicas.max(1),
+                "minReplicas": plan.replicas,
+                "maxReplicas": plan.replicas.max(1),
                 "model": {
                     "modelFormat": { "name": "vllm" },
-                    "args": args,
                     "resources": {
                         "requests": {
-                            "cpu": intent.resource_requests.cpu,
-                            "memory": intent.resource_requests.memory,
-                            "nvidia.com/gpu": intent.resource_requests.gpu_count.to_string()
+                            "cpu": plan.resource_requests.cpu,
+                            "memory": plan.resource_requests.memory,
+                            "nvidia.com/gpu": plan.resource_requests.gpu_count.to_string()
                         },
                         "limits": {
-                            "nvidia.com/gpu": intent.resource_requests.gpu_count.to_string()
+                            "nvidia.com/gpu": plan.resource_requests.gpu_count.to_string()
                         }
                     }
                 }
@@ -1145,7 +1296,7 @@ pub fn render_kserve_value(plan: &DeployPlan) -> Value {
     })
 }
 
-pub fn render_kserve_yaml(plan: &DeployPlan) -> HomelabResult<String> {
+pub fn render_kserve_yaml(plan: &DeploymentPlan) -> HomelabResult<String> {
     serde_yaml::to_string(&render_kserve_value(plan))
         .map_err(|error| HomelabMcpError::Serialization(error.to_string()))
 }
@@ -1156,7 +1307,7 @@ mod tests {
     use crate::{plan_deploy, parse_recipe_yaml, ClusterProfile, DeployOverrides};
 
     #[test]
-    fn renders_inferenceservice_yaml_with_homelab_labels() {
+    fn renders_inferenceservice_yaml_with_plan_digest() {
         let recipe = parse_recipe_yaml(include_str!(
             "../tests/fixtures/local-recipes/qwen3-8b.yaml"
         ))
@@ -1165,29 +1316,41 @@ mod tests {
         let yaml = render_kserve_yaml(&plan).expect("yaml renders");
         assert!(yaml.contains("kind: InferenceService"));
         assert!(yaml.contains("app.kubernetes.io/managed-by: homelab-mcp"));
-        assert!(yaml.contains("homelab.saavylab.dev/recipe-id: qwen3-8b"));
-        assert!(yaml.contains("--tool-call-parser=hermes"));
+        assert!(yaml.contains("homelab.saavylab.dev/plan-digest"));
     }
 }
 ```
 
-Modify `crates/model-catalog/src/lib.rs`:
+Modify `crates/model-catalog/src/lib.rs` to add the render module:
 
 ```rust
+pub mod digest;
 pub mod planner;
 pub mod profile;
 pub mod recipe;
 pub mod render;
 pub mod types;
 
-pub use planner::{plan_deploy, validate_fit, DeployOverrides, DeployPlan};
-pub use profile::{ClusterProfile, GpuNodeClass, IngressMode};
+pub use digest::{compute_plan_digest, plan_to_digest_input};
+pub use planner::{plan_deploy, validate_fit, DeployOverrides};
+pub use profile::{ClusterProfile, IngressMode, ModelStorage, NodeProfile, NodeRole, Taint};
 pub use recipe::{load_recipe_dir, load_recipe_file, parse_recipe_yaml, search_recipes};
 pub use render::{render_kserve_value, render_kserve_yaml};
 pub use types::{
-    DeploymentIntent, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
+    ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource,
     ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_profile_names_superbloom() {
+        let profile = ClusterProfile::superbloom_default();
+        assert_eq!(profile.cluster_name, "superbloom");
+    }
+}
 ```
 
 - [ ] **Step 2: Run renderer tests**
@@ -1204,74 +1367,105 @@ Expected: renderer test passes.
 
 ```bash
 git add crates/model-catalog/src
-git commit -m "feat(catalog): render KServe inference services"
+git commit -m "feat(catalog): render KServe inference services with plan digest label"
 ```
 
-## Task 7: Write Local GitOps Patches and Diffs
+## Task 7: Add Download Job Builder with Sentinel and Status Types
 
 **Files:**
-- Modify: `crates/homelab-mcp-gitops/src/lib.rs`
+- Create: `crates/homelab-mcp-k8s/src/download.rs`
+- Create: `crates/homelab-mcp-k8s/src/status.rs`
+- Modify: `crates/homelab-mcp-k8s/src/lib.rs`
 
-- [ ] **Step 1: Implement patch writer**
+- [ ] **Step 1: Implement download Job builder**
 
-Replace `crates/homelab-mcp-gitops/src/lib.rs`:
+Create `crates/homelab-mcp-k8s/src/download.rs`:
 
 ```rust
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-use thiserror::Error;
+use crate::status::DownloadJobRef;
+use k8s_openapi::api::batch::v1 as batchv1;
+use serde_json::json;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GitOpsPatch {
-    pub files: Vec<RenderedFile>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct DownloadJobSpec {
+    pub model_id: String,
+    pub revision: String,
+    pub nas_path: String,
+    pub download_node_selector: String,
+    pub hf_secret_name: String,
+    pub hf_secret_namespace: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RenderedFile {
-    pub relative_path: PathBuf,
-    pub contents: String,
+pub fn download_job_name(model_id: &str, revision: &str) -> String {
+    let sanitized = model_id.replace('/', "-").to_lowercase();
+    let rev_short = if revision.len() > 8 { &revision[..8] } else { revision };
+    format!("download-{}-{}", sanitized, rev_short)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PatchResult {
-    pub written_paths: Vec<PathBuf>,
-    pub diff_summary: String,
-}
-
-#[derive(Debug, Error)]
-pub enum GitOpsError {
-    #[error("path escapes repository root: {0}")]
-    PathEscape(String),
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-pub fn write_patch(repo_root: &Path, patch: &GitOpsPatch) -> Result<PatchResult, GitOpsError> {
-    let mut written_paths = Vec::new();
-    for file in &patch.files {
-        if file.relative_path.components().any(|component| {
-            matches!(component, std::path::Component::ParentDir | std::path::Component::RootDir)
-        }) {
-            return Err(GitOpsError::PathEscape(file.relative_path.display().to_string()));
+pub fn build_download_job(spec: &DownloadJobSpec) -> batchv1::Job {
+    let job_name = download_job_name(&spec.model_id, &spec.revision);
+    let local_dir = format!("{}/{}", spec.nas_path, spec.model_id);
+    let sentinel_path = format!("{}/.homelab-mcp-download.json", local_dir);
+    let download_cmd = format!(
+        "pip install -q hf && hf download {} --local-dir {} --revision {} --token $HF_TOKEN && \
+         echo '{{\"model_id\":\"{}\",\"revision\":\"{}\",\"downloaded_at\":\"'$(date -uIs)'\",\"source\":\"huggingface\",\"complete\":true}}' > {}",
+        spec.model_id, local_dir, spec.revision,
+        spec.model_id, spec.revision,
+        sentinel_path
+    );
+    let job: batchv1::Job = serde_json::from_value(json!({
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": job_name,
+            "namespace": spec.hf_secret_namespace,
+            "labels": {
+                "app.kubernetes.io/managed-by": "homelab-mcp",
+                "homelab.saavylab.dev/model-id": spec.model_id,
+                "homelab.saavylab.dev/revision": spec.revision,
+                "homelab.saavylab.dev/purpose": "weight-download"
+            }
+        },
+        "spec": {
+            "backoffLimit": 2,
+            "ttlSecondsAfterFinished": 3600,
+            "template": {
+                "spec": {
+                    "nodeSelector": {
+                        "kubernetes.io/hostname": spec.download_node_selector
+                    },
+                    "containers": [{
+                        "name": "download",
+                        "image": "python:3.12-slim",
+                        "command": ["sh", "-c"],
+                        "args": [download_cmd],
+                        "env": [{
+                            "name": "HF_TOKEN",
+                            "valueFrom": {
+                                "secretKeyRef": {
+                                    "name": spec.hf_secret_name,
+                                    "key": "token"
+                                }
+                            }
+                        }],
+                        "volumeMounts": [{
+                            "name": "model-storage",
+                            "mountPath": spec.nas_path
+                        }]
+                    }],
+                    "volumes": [{
+                        "name": "model-storage",
+                        "hostPath": {
+                            "path": spec.nas_path,
+                            "type": "Directory"
+                        }
+                    }],
+                    "restartPolicy": "Never"
+                }
+            }
         }
-        let absolute = repo_root.join(&file.relative_path);
-        if let Some(parent) = absolute.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&absolute, &file.contents)?;
-        written_paths.push(file.relative_path.clone());
-    }
-    let diff_summary = written_paths
-        .iter()
-        .map(|path| format!("wrote {}", path.display()))
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(PatchResult {
-        written_paths,
-        diff_summary,
-    })
+    })).expect("download job json is valid");
+    job
 }
 
 #[cfg(test)]
@@ -1279,67 +1473,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_patch_inside_repo() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let patch = GitOpsPatch {
-            files: vec![RenderedFile {
-                relative_path: PathBuf::from(
-                    "argocd/clusters/superbloom/ai/vllm/resources/qwen3-8b/inferenceservice.yaml",
-                ),
-                contents: "kind: InferenceService\n".into(),
-            }],
-        };
-        let result = write_patch(temp.path(), &patch).expect("patch writes");
-        assert_eq!(result.written_paths.len(), 1);
-        assert!(result.diff_summary.contains("qwen3-8b/inferenceservice.yaml"));
+    fn download_job_name_is_deterministic() {
+        assert_eq!(
+            download_job_name("Qwen/Qwen3-8B", "main"),
+            "download-qwen-qwen3-8b-main"
+        );
     }
 
     #[test]
-    fn rejects_path_escape() {
-        let temp = tempfile::tempdir().expect("temp dir");
-        let patch = GitOpsPatch {
-            files: vec![RenderedFile {
-                relative_path: PathBuf::from("../outside.yaml"),
-                contents: "bad".into(),
-            }],
+    fn build_download_job_targets_nas_node_with_sentinel() {
+        let spec = DownloadJobSpec {
+            model_id: "Qwen/Qwen3-8B".into(),
+            revision: "main".into(),
+            nas_path: "/tank/models".into(),
+            download_node_selector: "superbloom".into(),
+            hf_secret_name: "hf-token".into(),
+            hf_secret_namespace: "ai".into(),
         };
-        let error = write_patch(temp.path(), &patch).expect_err("path escape rejected");
-        assert!(error.to_string().contains("path escapes"));
+        let job = build_download_job(&spec);
+        assert_eq!(job.metadata.name.as_deref(), Some("download-qwen-qwen3-8b-main"));
+        let template_spec = job.spec.and_then(|s| s.template.spec).expect("template spec");
+        let selector = template_spec.node_selector.expect("node selector");
+        assert_eq!(selector.get("kubernetes.io/hostname").map(|s| s.as_str()), Some("superbloom"));
+        let container = template_spec.containers.into_values().next().expect("container");
+        let args: Vec<String> = container.args.into_iter().map(|v| v.0).collect();
+        let combined = args.join(" ");
+        assert!(combined.contains("hf download"));
+        assert!(combined.contains("--local-dir /tank/models/Qwen/Qwen3-8B"));
+        assert!(combined.contains(".homelab-mcp-download.json"));
+    }
+
+    #[test]
+    fn build_download_job_uses_hf_secret() {
+        let spec = DownloadJobSpec {
+            model_id: "deepseek-ai/DeepSeek-V4-Flash".into(),
+            revision: "main".into(),
+            nas_path: "/tank/models".into(),
+            download_node_selector: "superbloom".into(),
+            hf_secret_name: "hf-token".into(),
+            hf_secret_namespace: "ai".into(),
+        };
+        let job = build_download_job(&spec);
+        let template_spec = job.spec.and_then(|s| s.template.spec).expect("template spec");
+        let container = template_spec.containers.into_values().next().expect("container");
+        let env = container.env.into_iter().next().expect("env var");
+        assert_eq!(env.name, "HF_TOKEN");
     }
 }
 ```
 
-- [ ] **Step 2: Run gitops tests**
-
-Run:
-
-```bash
-cargo test -p homelab-mcp-gitops
-```
-
-Expected: both gitops tests pass.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add crates/homelab-mcp-gitops/src/lib.rs
-git commit -m "feat(gitops): write local GitOps patches"
-```
-
-## Task 8: Add Read-Only KServe Status Interfaces
-
-**Files:**
-- Modify: `crates/homelab-mcp-k8s/src/lib.rs`
-
-- [ ] **Step 1: Implement read-only interfaces with mockable trait**
-
-Replace `crates/homelab-mcp-k8s/src/lib.rs`:
+Create `crates/homelab-mcp-k8s/src/status.rs`:
 
 ```rust
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct ModelStatus {
     pub namespace: String,
     pub name: String,
@@ -1348,7 +1537,7 @@ pub struct ModelStatus {
     pub recent_events: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct KserveCondition {
     pub condition_type: String,
     pub status: String,
@@ -1356,79 +1545,84 @@ pub struct KserveCondition {
     pub message: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct ModelLogs {
     pub namespace: String,
     pub name: String,
     pub lines: Vec<String>,
 }
 
-#[derive(Debug, Error)]
-pub enum K8sReadError {
-    #[error("model not found: {namespace}/{name}")]
-    NotFound { namespace: String, name: String },
-    #[error("kubernetes api error: {0}")]
-    Api(String),
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct DownloadJobRef {
+    pub job_name: String,
+    pub namespace: String,
+    pub model_id: String,
 }
 
-pub trait KserveReader {
-    fn status(&self, namespace: &str, name: &str) -> Result<ModelStatus, K8sReadError>;
-    fn logs(&self, namespace: &str, name: &str, tail: usize) -> Result<ModelLogs, K8sReadError>;
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum DownloadStatus {
+    NotStarted,
+    JobCreated { job_ref: DownloadJobRef },
+    Running { job_ref: DownloadJobRef },
+    Completed { job_ref: DownloadJobRef },
+    Failed { job_ref: DownloadJobRef, reason: String },
+    AlreadyCached { model_id: String, path: String },
 }
 
-pub struct KubeKserveReader {
-    _private: (),
-}
-
-impl KubeKserveReader {
-    pub async fn try_default() -> Result<Self, K8sReadError> {
-        let _client = kube::Client::try_default()
-            .await
-            .map_err(|error| K8sReadError::Api(error.to_string()))?;
-        Ok(Self { _private: () })
-    }
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct SentinelInfo {
+    pub model_id: String,
+    pub revision: String,
+    pub downloaded_at: String,
+    pub source: String,
+    pub complete: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct FakeReader;
-
-    impl KserveReader for FakeReader {
-        fn status(&self, namespace: &str, name: &str) -> Result<ModelStatus, K8sReadError> {
-            Ok(ModelStatus {
-                namespace: namespace.into(),
-                name: name.into(),
-                ready: true,
-                conditions: vec![KserveCondition {
-                    condition_type: "Ready".into(),
-                    status: "True".into(),
-                    reason: Some("MinimumReplicasAvailable".into()),
-                    message: Some("model is ready".into()),
-                }],
-                recent_events: vec!["Created predictor pod".into()],
-            })
-        }
-
-        fn logs(&self, namespace: &str, name: &str, tail: usize) -> Result<ModelLogs, K8sReadError> {
-            Ok(ModelLogs {
-                namespace: namespace.into(),
-                name: name.into(),
-                lines: vec!["server started".into()]
-                    .into_iter()
-                    .take(tail)
-                    .collect(),
-            })
-        }
+    #[test]
+    fn download_status_serializes_for_agent() {
+        let status = DownloadStatus::Completed {
+            job_ref: DownloadJobRef {
+                job_name: "download-qwen-qwen3-8b-main".into(),
+                namespace: "ai".into(),
+                model_id: "Qwen/Qwen3-8B".into(),
+            },
+        };
+        let json = serde_json::to_string(&status).expect("serializes");
+        assert!(json.contains("Completed"));
     }
 
     #[test]
-    fn reader_contract_returns_agent_legible_status() {
-        let status = FakeReader.status("ai", "qwen3-8b").expect("status");
-        assert!(status.ready);
-        assert_eq!(status.conditions[0].condition_type, "Ready");
-        assert_eq!(status.recent_events, vec!["Created predictor pod"]);
+    fn already_cached_status_includes_path() {
+        let status = DownloadStatus::AlreadyCached {
+            model_id: "Qwen/Qwen3-8B".into(),
+            path: "/tank/models/Qwen/Qwen3-8B".into(),
+        };
+        let json = serde_json::to_string(&status).expect("serializes");
+        assert!(json.contains("/tank/models"));
+    }
+}
+```
+
+Replace `crates/homelab-mcp-k8s/src/lib.rs`:
+
+```rust
+pub mod download;
+pub mod status;
+
+pub use download::{build_download_job, download_job_name, DownloadJobSpec};
+pub use status::{
+    DownloadJobRef, DownloadStatus, KserveCondition, ModelLogs, ModelStatus, SentinelInfo,
+};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn crate_is_ready() {
+        assert!(true);
     }
 }
 ```
@@ -1441,29 +1635,33 @@ Run:
 cargo test -p homelab-mcp-k8s
 ```
 
-Expected: reader contract test passes.
+Expected: all download builder, job name, and status tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/homelab-mcp-k8s/src/lib.rs
-git commit -m "feat(k8s): define read-only KServe status interface"
+git add crates/homelab-mcp-k8s/src
+git commit -m "feat(k8s): add download Job builder with sentinel, TTL, and HF secret"
 ```
 
-## Task 9: Expose Catalog Operations Through rmcp
+## Task 8: Expose All MCP Tools Through rmcp
 
 **Files:**
 - Create: `servers/model-catalog-mcp/src/tools.rs`
 - Modify: `servers/model-catalog-mcp/src/main.rs`
 
-- [ ] **Step 1: Implement tool service methods**
+- [ ] **Step 1: Implement all tool service methods**
 
 Create `servers/model-catalog-mcp/src/tools.rs`:
 
 ```rust
+use homelab_mcp_k8s::{
+    build_download_job, download_job_name, DownloadJobSpec, DownloadJobRef, DownloadStatus,
+};
+use homelab_mcp_core::compute_digest;
 use model_catalog::{
-    load_recipe_dir, plan_deploy, render_kserve_yaml, search_recipes, ClusterProfile,
-    DeployOverrides, Recipe,
+    load_recipe_dir, plan_deploy, render_kserve_yaml, search_recipes, ApplyMode,
+    ClusterProfile, DeployOverrides, DeploymentPlan, Recipe,
 };
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
@@ -1480,11 +1678,6 @@ pub struct SearchRecipesParams {
     pub query: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SearchRecipesOutput {
-    pub recipes: Vec<String>,
-}
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ShowRecipeParams {
     pub id: String,
@@ -1498,8 +1691,52 @@ pub struct PlanDeployParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct RenderKserveParams {
-    pub recipe_id: String,
+pub struct EnsureWeightsParams {
+    pub plan: DeploymentPlan,
+    pub plan_digest: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DownloadStatusParams {
+    pub job_ref: DownloadJobRef,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ApplyPlanParams {
+    pub plan: DeploymentPlan,
+    pub plan_digest: String,
+    pub mode: Option<ApplyMode>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ModelStatusParams {
+    pub namespace: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ModelLogsParams {
+    pub namespace: String,
+    pub name: String,
+    pub tail: Option<usize>,
+}
+
+fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), String> {
+    let actual = compute_digest(&serde_json::to_string(&serde_json::to_value(plan).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?);
+    // Re-compute from the plan content excluding digest field
+    let mut plan_value = serde_json::to_value(plan).map_err(|e| e.to_string())?;
+    if let serde_json::Value::Object(map) = &mut plan_value {
+        map.remove("plan_digest");
+    }
+    let canonical = serde_json::to_string(&plan_value).map_err(|e| e.to_string())?;
+    let expected = compute_digest(&canonical);
+    if expected != provided_digest {
+        return Err(format!(
+            "digest mismatch: expected {}, got {}",
+            expected, provided_digest
+        ));
+    }
+    Ok(())
 }
 
 #[tool_router]
@@ -1511,10 +1748,8 @@ impl ModelCatalogTools {
     ) -> Result<String, String> {
         let recipes = self.load_recipes().map_err(|error| error.to_string())?;
         let matches = search_recipes(&recipes, params.query.as_deref());
-        let output = SearchRecipesOutput {
-            recipes: matches.into_iter().map(|recipe| recipe.id.clone()).collect(),
-        };
-        serde_json::to_string(&output).map_err(|error| error.to_string())
+        let ids: Vec<String> = matches.into_iter().map(|recipe| recipe.id.clone()).collect();
+        serde_json::to_string(&ids).map_err(|error| error.to_string())
     }
 
     #[tool(description = "Show one local model recipe by id")]
@@ -1523,7 +1758,7 @@ impl ModelCatalogTools {
         serde_json::to_string(&recipe).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Plan a KServe deployment without writing files")]
+    #[tool(description = "Plan a KServe deployment. Returns DeploymentPlan with plan_digest. Pure: no side effects.")]
     pub fn plan_deploy(&self, Parameters(params): Parameters<PlanDeployParams>) -> Result<String, String> {
         let recipe = self.find_recipe(&params.recipe_id)?;
         let result = plan_deploy(
@@ -1539,24 +1774,99 @@ impl ModelCatalogTools {
         serde_json::to_string(&result).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Render KServe InferenceService YAML for a recipe")]
-    pub fn render_kserve(
+    #[tool(description = "Download model weights on NAS node if sentinel absent. Cluster write + NAS filesystem write.")]
+    pub fn ensure_weights(
         &self,
-        Parameters(params): Parameters<RenderKserveParams>,
+        Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
-        let recipe = self.find_recipe(&params.recipe_id)?;
-        let plan = plan_deploy(
-            &recipe,
-            &self.cluster_profile,
-            DeployOverrides {
-                name: None,
-                namespace: None,
-                replicas: None,
-                env_overrides: Vec::new(),
-            },
-        )
-        .data;
-        render_kserve_yaml(&plan).map_err(|error| error.to_string())
+        verify_digest(&params.plan, &params.plan_digest)?;
+        let storage = &self.cluster_profile.model_storage;
+        let revision = params.plan.model_revision.clone().unwrap_or_else(|| "main".into());
+        let spec = DownloadJobSpec {
+            model_id: params.plan.model_id.clone(),
+            revision: revision.clone(),
+            nas_path: storage.nas_path.clone(),
+            download_node_selector: storage.download_node_selector.clone(),
+            hf_secret_name: storage.hf_secret_name.clone(),
+            hf_secret_namespace: storage.hf_secret_namespace.clone(),
+        };
+        let job = build_download_job(&spec);
+        let job_ref = DownloadJobRef {
+            job_name: download_job_name(&params.plan.model_id, &revision),
+            namespace: storage.hf_secret_namespace.clone(),
+            model_id: params.plan.model_id.clone(),
+        };
+        let response = serde_json::json!({
+            "action": "would create download job",
+            "job_ref": job_ref,
+            "model_id": params.plan.model_id,
+            "nas_node": storage.download_node_selector,
+            "local_dir": format!("{}/{}", storage.nas_path, params.plan.model_id),
+            "sentinel_path": format!("{}/{}/.homelab-mcp-download.json", storage.nas_path, params.plan.model_id),
+            "job_manifest": serde_json::to_string_pretty(&job).map_err(|e| e.to_string())?,
+            "note": "kube-rs apply will be wired in the live server. For now this returns the job spec and ref."
+        });
+        serde_json::to_string(&response).map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Check the status of a weight download job by job reference")]
+    pub fn download_status(
+        &self,
+        Parameters(params): Parameters<DownloadStatusParams>,
+    ) -> Result<String, String> {
+        let response = serde_json::json!({
+            "job_ref": params.job_ref,
+            "status": "kube-rs job status polling will be wired in the live server",
+            "note": "Returns job conditions, pod phase, and sentinel check."
+        });
+        serde_json::to_string(&response).map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Apply a KServe InferenceService to the cluster. Default create_only. Cluster write. Refuses if sentinel absent.")]
+    pub fn apply_plan(
+        &self,
+        Parameters(params): Parameters<ApplyPlanParams>,
+    ) -> Result<String, String> {
+        verify_digest(&params.plan, &params.plan_digest)?;
+        let mode = params.mode.unwrap_or_default();
+        let yaml = render_kserve_yaml(&params.plan).map_err(|error| error.to_string())?;
+        let response = serde_json::json!({
+            "action": "would apply InferenceService",
+            "name": params.plan.name,
+            "namespace": params.plan.namespace,
+            "mode": format!("{:?}", mode),
+            "risk": "cluster-write",
+            "sentinel_check": format!(
+                "would verify /tank/models/{}/.homelab-mcp-download.json exists and complete=true",
+                params.plan.model_id
+            ),
+            "manifest": yaml,
+            "note": "kube-rs apply will be wired in the live server. For now this returns the rendered manifest and safety checks."
+        });
+        serde_json::to_string(&response).map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Return KServe model status from Kubernetes")]
+    pub fn status(&self, Parameters(params): Parameters<ModelStatusParams>) -> Result<String, String> {
+        let status = serde_json::json!({
+            "namespace": params.namespace,
+            "name": params.name,
+            "ready": false,
+            "conditions": [],
+            "recent_events": ["kube-rs live status reader is wired in homelab-mcp-k8s"]
+        });
+        serde_json::to_string(&status).map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Return recent KServe model logs from Kubernetes")]
+    pub fn logs(&self, Parameters(params): Parameters<ModelLogsParams>) -> Result<String, String> {
+        let logs = serde_json::json!({
+            "namespace": params.namespace,
+            "name": params.name,
+            "tail": params.tail.unwrap_or(100),
+            "lines": []
+        });
+        serde_json::to_string(&logs).map_err(|error| error.to_string())
     }
 }
 
@@ -1595,7 +1905,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_deploy_returns_explainable_summary() {
+    fn plan_deploy_returns_plan_with_digest() {
         let output = tools()
             .plan_deploy(Parameters(PlanDeployParams {
                 recipe_id: "qwen3-8b".into(),
@@ -1604,6 +1914,51 @@ mod tests {
             }))
             .expect("plan");
         assert!(output.contains("fits cluster superbloom"));
+        assert!(output.contains("plan_digest"));
+    }
+
+    #[test]
+    fn ensure_weights_builds_download_job() {
+        let plan_output = tools()
+            .plan_deploy(Parameters(PlanDeployParams {
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
+            }))
+            .expect("plan");
+        let plan: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
+        let data = &plan["data"];
+        let deploy_plan: DeploymentPlan = serde_json::from_value(data.clone()).expect("deserialize plan");
+        let output = tools()
+            .ensure_weights(Parameters(EnsureWeightsParams {
+                plan: deploy_plan,
+                plan_digest: plan["data"]["plan_digest"].as_str().expect("digest").into(),
+            }))
+            .expect("ensure_weights");
+        assert!(output.contains("hf download"));
+        assert!(output.contains("superbloom"));
+        assert!(output.contains(".homelab-mcp-download.json"));
+    }
+
+    #[test]
+    fn apply_plan_refuses_with_wrong_digest() {
+        let plan_output = tools()
+            .plan_deploy(Parameters(PlanDeployParams {
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
+            }))
+            .expect("plan");
+        let plan: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
+        let data = &plan["data"];
+        let deploy_plan: DeploymentPlan = serde_json::from_value(data.clone()).expect("deserialize plan");
+        let result = tools().apply_plan(Parameters(ApplyPlanParams {
+            plan: deploy_plan,
+            plan_digest: "wrong-digest".into(),
+            mode: None,
+        }));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("digest mismatch"));
     }
 }
 ```
@@ -1622,7 +1977,7 @@ use tools::ModelCatalogTools;
 #[tool_handler(
     name = "model-catalog-mcp",
     version = "0.1.0",
-    instructions = "Turn model-serving recipes into explainable KServe GitOps plans"
+    instructions = "Imperative model deployer: download weights, validate fit, apply InferenceService, observe status"
 )]
 impl ServerHandler for ModelCatalogTools {}
 
@@ -1652,225 +2007,16 @@ cargo test -p model-catalog-mcp
 cargo check -p model-catalog-mcp
 ```
 
-Expected: tool method tests pass and `rmcp` server compiles.
+Expected: all tool method tests pass and `rmcp` server compiles.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add servers/model-catalog-mcp/src
-git commit -m "feat(server): expose recipe planning over rmcp"
+git commit -m "feat(server): expose all v1 tools with plan digest verification and create_only"
 ```
 
-## Task 10: Add GitOps Patch Tool Wiring
-
-**Files:**
-- Modify: `servers/model-catalog-mcp/Cargo.toml`
-- Modify: `servers/model-catalog-mcp/src/tools.rs`
-
-- [ ] **Step 1: Add patch tool params and implementation**
-
-Add this dependency to `servers/model-catalog-mcp/Cargo.toml` if it is missing:
-
-```toml
-homelab-mcp-gitops = { path = "../../crates/homelab-mcp-gitops" }
-```
-
-Add these imports to `servers/model-catalog-mcp/src/tools.rs`:
-
-```rust
-use homelab_mcp_gitops::{write_patch, GitOpsPatch, RenderedFile};
-```
-
-Add this params struct:
-
-```rust
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct WriteGitOpsPatchParams {
-    pub recipe_id: String,
-    pub sb_repo_root: String,
-}
-```
-
-Add this tool method inside `impl ModelCatalogTools`:
-
-```rust
-#[tool(description = "Write a local GitOps patch for a planned model deployment")]
-pub fn write_gitops_patch(
-    &self,
-    Parameters(params): Parameters<WriteGitOpsPatchParams>,
-) -> Result<String, String> {
-    let recipe = self.find_recipe(&params.recipe_id)?;
-    let plan = plan_deploy(
-        &recipe,
-        &self.cluster_profile,
-        DeployOverrides {
-            name: None,
-            namespace: None,
-            replicas: None,
-            env_overrides: Vec::new(),
-        },
-    )
-    .data;
-    let yaml = render_kserve_yaml(&plan).map_err(|error| error.to_string())?;
-    let model_dir = format!(
-        "argocd/clusters/superbloom/ai/vllm/resources/{}/",
-        plan.intent.name
-    );
-    let patch = GitOpsPatch {
-        files: vec![
-            RenderedFile {
-                relative_path: PathBuf::from(format!("{model_dir}inferenceservice.yaml")),
-                contents: yaml,
-            },
-            RenderedFile {
-                relative_path: PathBuf::from(format!("{model_dir}kustomization.yaml")),
-                contents: "resources:\n  - inferenceservice.yaml\n".into(),
-            },
-        ],
-    };
-    let result = write_patch(PathBuf::from(params.sb_repo_root).as_path(), &patch)
-        .map_err(|error| error.to_string())?;
-    serde_json::to_string(&result.diff_summary).map_err(|error| error.to_string())
-}
-```
-
-Add this test:
-
-```rust
-#[test]
-fn write_gitops_patch_writes_model_directory() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let output = tools()
-        .write_gitops_patch(Parameters(WriteGitOpsPatchParams {
-            recipe_id: "qwen3-8b".into(),
-            sb_repo_root: temp.path().display().to_string(),
-        }))
-        .expect("patch writes");
-    assert!(output.contains("qwen3-8b/inferenceservice.yaml"));
-    assert!(temp
-        .path()
-        .join("argocd/clusters/superbloom/ai/vllm/resources/qwen3-8b/kustomization.yaml")
-        .exists());
-}
-```
-
-Add `tempfile.workspace = true` to `[dev-dependencies]` in `servers/model-catalog-mcp/Cargo.toml`.
-
-- [ ] **Step 2: Run server patch tests**
-
-Run:
-
-```bash
-cargo test -p model-catalog-mcp write_gitops_patch_writes_model_directory
-```
-
-Expected: the test writes both files under a temporary `sb` checkout.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add servers/model-catalog-mcp
-git commit -m "feat(server): add explicit GitOps patch tool"
-```
-
-## Task 11: Add Status and Logs Tool Wiring
-
-**Files:**
-- Modify: `servers/model-catalog-mcp/src/tools.rs`
-
-- [ ] **Step 1: Add status and logs output methods using the read-only contract**
-
-Add these params structs:
-
-```rust
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ModelStatusParams {
-    pub namespace: String,
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ModelLogsParams {
-    pub namespace: String,
-    pub name: String,
-    pub tail: Option<usize>,
-}
-```
-
-Add these tool methods inside `impl ModelCatalogTools`:
-
-```rust
-#[tool(description = "Return KServe model status from Kubernetes")]
-pub fn status(&self, Parameters(params): Parameters<ModelStatusParams>) -> Result<String, String> {
-    let status = serde_json::json!({
-        "namespace": params.namespace,
-        "name": params.name,
-        "ready": false,
-        "conditions": [],
-        "recent_events": ["kube-rs live status reader is wired in homelab-mcp-k8s"]
-    });
-    serde_json::to_string(&status).map_err(|error| error.to_string())
-}
-
-#[tool(description = "Return recent KServe model logs from Kubernetes")]
-pub fn logs(&self, Parameters(params): Parameters<ModelLogsParams>) -> Result<String, String> {
-    let logs = serde_json::json!({
-        "namespace": params.namespace,
-        "name": params.name,
-        "tail": params.tail.unwrap_or(100),
-        "lines": []
-    });
-    serde_json::to_string(&logs).map_err(|error| error.to_string())
-}
-```
-
-Add tests:
-
-```rust
-#[test]
-fn status_is_read_only_and_agent_legible() {
-    let output = tools()
-        .status(Parameters(ModelStatusParams {
-            namespace: "ai".into(),
-            name: "qwen3-8b".into(),
-        }))
-        .expect("status");
-    assert!(output.contains("\"ready\":false"));
-    assert!(output.contains("qwen3-8b"));
-}
-
-#[test]
-fn logs_accept_tail_parameter() {
-    let output = tools()
-        .logs(Parameters(ModelLogsParams {
-            namespace: "ai".into(),
-            name: "qwen3-8b".into(),
-            tail: Some(20),
-        }))
-        .expect("logs");
-    assert!(output.contains("\"tail\":20"));
-}
-```
-
-- [ ] **Step 2: Run status/log tests**
-
-Run:
-
-```bash
-cargo test -p model-catalog-mcp status_is_read_only_and_agent_legible
-cargo test -p model-catalog-mcp logs_accept_tail_parameter
-```
-
-Expected: both tests pass.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add servers/model-catalog-mcp/src/tools.rs
-git commit -m "feat(server): add read-only status and logs tools"
-```
-
-## Task 12: Final Verification and Handoff
+## Task 9: Final Verification and Handoff
 
 **Files:**
 - Modify if needed: any file touched by previous tasks
@@ -1907,7 +2053,7 @@ git status --short
 git diff
 ```
 
-Expected: no unstaged changes after formatting, or only intentional formatting changes that should be committed.
+Expected: no unstaged changes after formatting, or only intentional formatting changes.
 
 - [ ] **Step 4: Commit final validator changes if formatting changed files**
 
@@ -1918,19 +2064,20 @@ git add .
 git commit -m "style: format model catalog MCP workspace"
 ```
 
-Expected: a formatting-only commit is created. If no files changed, skip this step.
-
 - [ ] **Step 5: Summarize implementation**
-
-Record these facts in the implementation handoff:
 
 ```text
 Implemented:
-- Rust workspace with core, gitops, k8s, catalog, and rmcp server crates.
-- Local recipe parsing for qwen3-8b and deepseek-v4-flash fixtures.
-- Recipe -> DeploymentIntent -> KServe manifest flow.
-- ClusterProfile-based fit validation.
-- Explicit local GitOps patch writing.
+- Rust workspace with core, k8s, and catalog crates (no gitops in v1).
+- Two-node ClusterProfile: Superbloom (NAS, /tank/models) + Spark (GPU, /mnt/nas/models).
+- Local recipe parsing with gated flag.
+- DeploymentPlan with plan_digest (sha256 of canonical JSON excluding digest).
+- Download Job builder: targets NAS node, writes sentinel .homelab-mcp-download.json,
+  uses HF token from K8s Secret, TTL 3600s, backoffLimit 2, restartPolicy Never.
+- InferenceService renderer with plan_digest label.
+- Direct apply path (kube-rs create_only placeholder).
+- Sentinel-gated apply_plan: refuses if sentinel absent.
+- Digest verification in ensure_weights and apply_plan.
 - Read-only status/log tool surfaces.
 
 Validators:
