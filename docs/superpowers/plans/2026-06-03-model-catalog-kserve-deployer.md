@@ -18,7 +18,6 @@ Create this workspace:
 homelab-mcp/
   Cargo.toml
   rust-toolchain.toml
-  rustfmt.toml
   .gitignore
   crates/
     homelab-mcp-core/
@@ -60,7 +59,6 @@ Responsibilities:
 **Files:**
 - Create: `Cargo.toml`
 - Create: `rust-toolchain.toml`
-- Create: `rustfmt.toml`
 - Create: `.gitignore`
 - Create: `crates/*/Cargo.toml`
 - Create: `crates/*/src/lib.rs`
@@ -110,13 +108,6 @@ Create `rust-toolchain.toml`:
 [toolchain]
 channel = "stable"
 components = ["rustfmt", "clippy"]
-```
-
-Create `rustfmt.toml`:
-
-```toml
-edition = "2024"
-max_width = 100
 ```
 
 Create `.gitignore`:
@@ -310,7 +301,7 @@ Expected: all four `crate_is_ready` tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add Cargo.toml rust-toolchain.toml rustfmt.toml .gitignore crates servers
+git add Cargo.toml rust-toolchain.toml .gitignore crates servers
 git commit -m "chore: scaffold homelab MCP workspace"
 ```
 
