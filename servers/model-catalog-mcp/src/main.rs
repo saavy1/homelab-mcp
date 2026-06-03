@@ -49,7 +49,9 @@ async fn main() -> Result<()> {
         config,
     );
 
-    let app = axum::Router::new().fallback_service(service);
+    let app = axum::Router::new()
+        .route("/health", axum::routing::get(|| async { "ok" }))
+        .fallback_service(service);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("model-catalog-mcp listening on {addr}");
