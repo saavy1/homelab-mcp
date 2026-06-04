@@ -110,6 +110,16 @@ pub fn sanitize_label_value(s: &str) -> String {
     s.replace('/', "-").replace(':', "-").to_lowercase()
 }
 
+/// Sanitize a string for use as a Kubernetes resource name (DNS subdomain label).
+/// Only lowercase alphanumeric, hyphens, and dots allowed, but dots are rejected
+/// by some admission webhooks (e.g. KServe), so replace dots with hyphens too.
+pub fn sanitize_dns_name(s: &str) -> String {
+    s.replace('.', "-")
+        .replace('/', "-")
+        .replace('_', "-")
+        .to_lowercase()
+}
+
 pub fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -156,5 +166,12 @@ mod tests {
         assert_eq!(sanitize_label_value("LiquidAI/LFM2.5-350M"), "liquidai-lfm2.5-350m");
         assert_eq!(sanitize_label_value("deepseek-ai/DeepSeek-V4-Flash"), "deepseek-ai-deepseek-v4-flash");
         assert_eq!(sanitize_label_value("no-slashes"), "no-slashes");
+    }
+
+    #[test]
+    fn sanitize_dns_name_replaces_dots_and_slashes() {
+        assert_eq!(sanitize_dns_name("lfm2.5-350m"), "lfm2-5-350m");
+        assert_eq!(sanitize_dns_name("Qwen/Qwen3-8B"), "qwen-qwen3-8b");
+        assert_eq!(sanitize_dns_name("my_model"), "my-model");
     }
 }

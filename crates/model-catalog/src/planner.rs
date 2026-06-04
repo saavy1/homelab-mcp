@@ -2,7 +2,7 @@ use crate::digest::compute_plan_digest;
 use crate::{
     ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode,
 };
-use homelab_mcp_core::{ToolResult, ValidationIssue};
+use homelab_mcp_core::{ToolResult, ValidationIssue, sanitize_dns_name};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeployOverrides {
@@ -28,11 +28,11 @@ pub fn plan_deploy(
     profile: &ClusterProfile,
     overrides: DeployOverrides,
 ) -> ToolResult<DeploymentPlan> {
-    let name = overrides
+    let name = sanitize_dns_name(&overrides
         .name
         .clone()
         .or_else(|| recipe.serving.service_name.clone())
-        .unwrap_or_else(|| recipe.id.clone());
+        .unwrap_or_else(|| recipe.id.clone()));
     let namespace = overrides
         .namespace
         .clone()
