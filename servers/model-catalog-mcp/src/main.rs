@@ -14,7 +14,13 @@ use tools::ModelCatalogTools;
 #[tool_handler(
     name = "model-catalog-mcp",
     version = "0.1.0",
-    instructions = "Imperative model deployer: download weights, validate fit, apply InferenceService, observe status"
+    instructions = "Imperative model deployer for the Superbloom homelab. \
+        Workflow: search_recipes → plan_deploy → ensure_weights → apply_plan → status. \
+        Recipes are YAML files loaded from a K8s ConfigMap mounted at /etc/model-catalog/recipes. \
+        To add a new recipe, edit the ConfigMap at \
+        sb/argocd/clusters/superbloom/infra/model-catalog-mcp/resources/configmap.yaml \
+        in the sb GitOps repo, then push and wait for ArgoCD sync. \
+        Recipe env vars must be {name, value} objects, not KEY=VALUE strings."
 )]
 impl ServerHandler for ModelCatalogTools {}
 
