@@ -107,17 +107,14 @@ pub fn compute_digest(canonical_json: &str) -> String {
 /// Sanitize a string for use as a Kubernetes label value.
 /// Replaces `/` with `-` and converts to lowercase per K8s label rules.
 pub fn sanitize_label_value(s: &str) -> String {
-    s.replace('/', "-").replace(':', "-").to_lowercase()
+    s.replace(['/', ':'], "-").to_lowercase()
 }
 
 /// Sanitize a string for use as a Kubernetes resource name (DNS subdomain label).
 /// Only lowercase alphanumeric, hyphens, and dots allowed, but dots are rejected
 /// by some admission webhooks (e.g. KServe), so replace dots with hyphens too.
 pub fn sanitize_dns_name(s: &str) -> String {
-    s.replace('.', "-")
-        .replace('/', "-")
-        .replace('_', "-")
-        .to_lowercase()
+    s.replace(['.', '/', '_'], "-").to_lowercase()
 }
 
 pub fn init_tracing() {

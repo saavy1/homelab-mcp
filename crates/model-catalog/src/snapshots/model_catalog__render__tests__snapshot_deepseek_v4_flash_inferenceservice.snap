@@ -35,6 +35,8 @@ spec:
         name: kserve-container
         resources:
           limits:
+            cpu: "2"
+            memory: 16Gi
             nvidia.com/gpu: "1"
           requests:
             cpu: "2"

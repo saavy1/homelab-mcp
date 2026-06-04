@@ -52,6 +52,8 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
                             "nvidia.com/gpu": plan.resource_requests.gpu_count.to_string()
                         },
                         "limits": {
+                            "cpu": plan.resource_requests.cpu,
+                            "memory": plan.resource_requests.memory,
                             "nvidia.com/gpu": plan.resource_requests.gpu_count.to_string()
                         }
                     },
