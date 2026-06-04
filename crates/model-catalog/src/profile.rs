@@ -96,8 +96,8 @@ impl ClusterProfile {
                 nas_path: "/tank/models".into(),
                 gpu_node_path: "/mnt/nas/models".into(),
                 download_node_selector: "superbloom".into(),
-                hf_secret_name: "hf-token".into(),
-                hf_secret_namespace: "ai".into(),
+                hf_secret_name: "hermes-env".into(),
+                hf_secret_namespace: "hermes".into(),
             },
         }
     }
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn hf_secret_is_configured() {
         let profile = ClusterProfile::superbloom_default();
-        assert_eq!(profile.model_storage.hf_secret_name, "hf-token");
-        assert_eq!(profile.model_storage.hf_secret_namespace, "ai");
+        assert_eq!(profile.model_storage.hf_secret_name, "hermes-env");
+        assert_eq!(profile.model_storage.hf_secret_namespace, "hermes");
     }
 }

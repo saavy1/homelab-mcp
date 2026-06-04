@@ -62,7 +62,7 @@ pub fn build_download_job(spec: &DownloadJobSpec) -> batchv1::Job {
                             "valueFrom": {
                                 "secretKeyRef": {
                                     "name": spec.hf_secret_name,
-                                    "key": "token"
+                                    "key": "HF_TOKEN"
                                 }
                             }
                         }],
