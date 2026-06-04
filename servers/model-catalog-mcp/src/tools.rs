@@ -5,8 +5,8 @@ use homelab_mcp_k8s::{
     get_predictor_logs,
 };
 use model_catalog::{
-    ApplyMode, ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, load_recipe_dir,
-    plan_deploy, plan_to_digest_input, render_kserve_value, search_recipes,
+    ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, load_recipe_dir, plan_deploy,
+    plan_to_digest_input, render_kserve_value, search_recipes,
 };
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
@@ -38,7 +38,9 @@ pub struct PlanDeployParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct EnsureWeightsParams {
-    pub plan: DeploymentPlan,
+    pub recipe_id: String,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
     pub plan_digest: String,
 }
 
@@ -49,9 +51,10 @@ pub struct DownloadStatusParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ApplyPlanParams {
-    pub plan: DeploymentPlan,
+    pub recipe_id: String,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
     pub plan_digest: String,
-    pub mode: Option<ApplyMode>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -130,43 +133,43 @@ impl ModelCatalogTools {
     #[tool(
         description = "Download model weights on NAS node. Creates a K8s Job if sentinel absent. Cluster write + NAS filesystem write."
     )]
-    #[instrument(skip(self, params), fields(model_id = %params.plan.model_id))]
+    #[instrument(skip(self, params), fields(recipe_id = %params.recipe_id))]
     pub async fn ensure_weights(
         &self,
         Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
-        verify_digest(&params.plan, &params.plan_digest)?;
+        let plan = self.derive_plan(&params.recipe_id, params.name, params.namespace)?;
+        verify_digest(&plan, &params.plan_digest)?;
         let storage = &self.cluster_profile.model_storage;
-        let revision = params
-            .plan
+        let revision = plan
             .model_revision
             .clone()
             .unwrap_or_else(|| "main".into());
-        let job_name = download_job_name(&params.plan.model_id, &revision);
+        let job_name = download_job_name(&plan.model_id, &revision);
 
         // Check if already running/completed
         let job_ref = DownloadJobRef {
             job_name: job_name.clone(),
             namespace: storage.hf_secret_namespace.clone(),
-            model_id: params.plan.model_id.clone(),
+            model_id: plan.model_id.clone(),
         };
         match get_download_status(&job_ref).await {
             Ok(DownloadStatus::Completed { .. }) => {
-                info!(model_id = %params.plan.model_id, "weights already downloaded");
+                info!(model_id = %plan.model_id, "weights already downloaded");
                 let response = serde_json::json!({
                     "action": "already_complete",
                     "job_ref": job_ref,
-                    "model_id": params.plan.model_id,
+                    "model_id": plan.model_id,
                     "status": "completed"
                 });
                 return serde_json::to_string(&response).map_err(|e| e.to_string());
             }
             Ok(DownloadStatus::Running { .. }) => {
-                info!(model_id = %params.plan.model_id, "download already running");
+                info!(model_id = %plan.model_id, "download already running");
                 let response = serde_json::json!({
                     "action": "already_running",
                     "job_ref": job_ref,
-                    "model_id": params.plan.model_id,
+                    "model_id": plan.model_id,
                     "status": "running"
                 });
                 return serde_json::to_string(&response).map_err(|e| e.to_string());
@@ -175,7 +178,7 @@ impl ModelCatalogTools {
         }
 
         let spec = DownloadJobSpec {
-            model_id: params.plan.model_id.clone(),
+            model_id: plan.model_id.clone(),
             revision: revision.clone(),
             nas_path: storage.nas_path.clone(),
             download_node_selector: storage.download_node_selector.clone(),
@@ -186,13 +189,13 @@ impl ModelCatalogTools {
         let created_name = create_download_job(&job, &storage.hf_secret_namespace)
             .await
             .map_err(|e| format!("create download job: {e}"))?;
-        info!(job_name = %created_name, model_id = %params.plan.model_id, "created download job");
+        info!(job_name = %created_name, model_id = %plan.model_id, "created download job");
         let response = serde_json::json!({
             "action": "created_download_job",
             "job_ref": job_ref,
-            "model_id": params.plan.model_id,
+            "model_id": plan.model_id,
             "nas_node": storage.download_node_selector,
-            "local_dir": format!("{}/{}", storage.nas_path, params.plan.model_id),
+            "local_dir": format!("{}/{}", storage.nas_path, plan.model_id),
         });
         serde_json::to_string(&response).map_err(|e| e.to_string())
     }
@@ -213,20 +216,19 @@ impl ModelCatalogTools {
     #[tool(
         description = "Apply a KServe InferenceService to the cluster. Default create_only. Cluster write. Refuses if sentinel absent."
     )]
-    #[instrument(skip(self, params), fields(name = %params.plan.name, namespace = %params.plan.namespace))]
+    #[instrument(skip(self, params), fields(recipe_id = %params.recipe_id))]
     pub async fn apply_plan(
         &self,
         Parameters(params): Parameters<ApplyPlanParams>,
     ) -> Result<String, String> {
-        verify_digest(&params.plan, &params.plan_digest)?;
-        let mode = params.mode.unwrap_or_default();
+        let plan = self.derive_plan(&params.recipe_id, params.name, params.namespace)?;
+        verify_digest(&plan, &params.plan_digest)?;
 
         // Sentinel check: verify download completed
         let job_ref = DownloadJobRef {
             job_name: download_job_name(
-                &params.plan.model_id,
-                &params
-                    .plan
+                &plan.model_id,
+                &plan
                     .model_revision
                     .clone()
                     .unwrap_or_else(|| "main".into()),
@@ -236,7 +238,7 @@ impl ModelCatalogTools {
                 .model_storage
                 .hf_secret_namespace
                 .clone(),
-            model_id: params.plan.model_id.clone(),
+            model_id: plan.model_id.clone(),
         };
         let dl_status = get_download_status(&job_ref)
             .await
@@ -248,16 +250,16 @@ impl ModelCatalogTools {
             ));
         }
 
-        let value = render_kserve_value(&params.plan);
-        let created = create_inferenceservice(value, &params.plan.namespace)
+        let value = render_kserve_value(&plan);
+        let created = create_inferenceservice(value, &plan.namespace)
             .await
             .map_err(|e| format!("create InferenceService: {e}"))?;
-        info!(name = %params.plan.name, namespace = %params.plan.namespace, mode = ?mode, "applied InferenceService");
+        info!(name = %plan.name, namespace = %plan.namespace, "applied InferenceService");
         let response = serde_json::json!({
             "action": "created_inferenceservice",
-            "name": params.plan.name,
-            "namespace": params.plan.namespace,
-            "mode": format!("{:?}", mode),
+            "name": plan.name,
+            "namespace": plan.namespace,
+            "mode": "CreateOnly",
             "risk": "cluster-write",
             "created_name": created,
         });
@@ -293,6 +295,29 @@ impl ModelCatalogTools {
 }
 
 impl ModelCatalogTools {
+    fn derive_plan(
+        &self,
+        recipe_id: &str,
+        name: Option<String>,
+        namespace: Option<String>,
+    ) -> Result<DeploymentPlan, String> {
+        let recipe = self.find_recipe(recipe_id)?;
+        let result = plan_deploy(
+            &recipe,
+            &self.cluster_profile,
+            DeployOverrides {
+                name,
+                namespace,
+                replicas: None,
+                env_overrides: Vec::new(),
+            },
+        );
+        if !result.issues.is_empty() {
+            return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
+        }
+        Ok(result.data)
+    }
+
     fn load_recipes(&self) -> Result<Vec<Recipe>, String> {
         load_recipe_dir(&self.recipe_dir).map_err(|error| error.to_string())
     }
@@ -349,16 +374,15 @@ mod tests {
             }))
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
-        let data = &plan_value["data"];
-        let deploy_plan: DeploymentPlan =
-            serde_json::from_value(data.clone()).expect("deserialize plan");
         let digest = plan_value["data"]["plan_digest"]
             .as_str()
             .expect("digest")
             .to_string();
         let result = tools()
             .ensure_weights(Parameters(EnsureWeightsParams {
-                plan: deploy_plan,
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
                 plan_digest: digest,
             }))
             .await;
@@ -378,13 +402,12 @@ mod tests {
                 namespace: None,
             }))
             .expect("plan");
-        let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
-        let data = &plan_value["data"];
-        let deploy_plan: DeploymentPlan =
-            serde_json::from_value(data.clone()).expect("deserialize plan");
+        assert!(plan_output.contains("plan_digest"));
         let result = tools()
             .ensure_weights(Parameters(EnsureWeightsParams {
-                plan: deploy_plan,
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
                 plan_digest: "wrong-digest".into(),
             }))
             .await;
@@ -401,15 +424,13 @@ mod tests {
                 namespace: None,
             }))
             .expect("plan");
-        let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
-        let data = &plan_value["data"];
-        let deploy_plan: DeploymentPlan =
-            serde_json::from_value(data.clone()).expect("deserialize plan");
+        assert!(plan_output.contains("plan_digest"));
         let result = tools()
             .apply_plan(Parameters(ApplyPlanParams {
-                plan: deploy_plan,
+                recipe_id: "qwen3-8b".into(),
+                name: None,
+                namespace: None,
                 plan_digest: "wrong-digest".into(),
-                mode: None,
             }))
             .await;
         assert!(result.is_err());
