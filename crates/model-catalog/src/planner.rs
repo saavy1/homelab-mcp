@@ -55,6 +55,11 @@ pub fn plan_deploy(
         },
         model_id: recipe.model.id.clone(),
         model_revision: recipe.model.revision.clone(),
+        model_path: format!(
+            "{}/{}",
+            profile.model_storage.gpu_node_path,
+            recipe.model.id
+        ),
         plan_digest: String::new(),
     };
     plan.plan_digest = compute_plan_digest(&plan);

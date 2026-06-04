@@ -3,6 +3,17 @@ use homelab_mcp_core::{HomelabMcpError, HomelabResult, sanitize_label_value};
 use serde_json::{Value, json};
 
 pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
+    // The GPU node mounts the NAS at /mnt/nas/models; model files live at
+    // /mnt/nas/models/<org>/<model>. We pass the full path to --model.
+    let model_arg = format!("--model={}", plan.model_path);
+    let served_model_arg = format!("--served-model-name={}", plan.name);
+    // Derive the NAS mount point: parent of org/model in the model_path.
+    // e.g. /mnt/nas/models/LiquidAI/LFM2.5-350M -> /mnt/nas/models
+    let mount_path = {
+        let parts: Vec<&str> = plan.model_path.split('/').collect();
+        parts[..parts.len() - 2].join("/")
+    };
+
     json!({
         "apiVersion": "serving.kserve.io/v1beta1",
         "kind": "InferenceService",
@@ -23,8 +34,17 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
             "predictor": {
                 "minReplicas": plan.replicas,
                 "maxReplicas": plan.replicas.max(1),
-                "model": {
-                    "modelFormat": { "name": "vllm" },
+                "containers": [{
+                    "name": "kserve-container",
+                    "image": "vllm/vllm-openai:latest",
+                    "command": ["python3", "-m", "vllm.entrypoints.openai.api_server"],
+                    "args": [model_arg, served_model_arg,
+                             "--host=0.0.0.0", "--port=8080",
+                             "--trust-remote-code"],
+                    "env": [
+                        { "name": "HF_HUB_OFFLINE", "value": "1" },
+                        { "name": "TRANSFORMERS_OFFLINE", "value": "1" }
+                    ],
                     "resources": {
                         "requests": {
                             "cpu": plan.resource_requests.cpu,
@@ -34,7 +54,26 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
                         "limits": {
                             "nvidia.com/gpu": plan.resource_requests.gpu_count.to_string()
                         }
+                    },
+                    "volumeMounts": [{
+                        "name": "nas-models",
+                        "mountPath": mount_path,
+                        "readOnly": true
+                    }]
+                }],
+                "volumes": [{
+                    "name": "nas-models",
+                    "hostPath": {
+                        "path": mount_path,
+                        "type": "Directory"
                     }
+                }],
+                "tolerations": [
+                    { "key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule" },
+                    { "key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoExecute" }
+                ],
+                "nodeSelector": {
+                    "nvidia.com/gpu.product": "NVIDIA-GB10"
                 }
             }
         }

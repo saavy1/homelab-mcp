@@ -1,5 +1,6 @@
 ---
 source: crates/model-catalog/src/render.rs
+assertion_line: 132
 expression: value
 ---
 apiVersion: serving.kserve.io/v1beta1

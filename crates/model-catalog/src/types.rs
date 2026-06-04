@@ -100,6 +100,7 @@ pub struct DeploymentPlan {
     pub resource_requests: ResourceRequests,
     pub model_id: String,
     pub model_revision: Option<String>,
+    pub model_path: String,
     pub plan_digest: String,
 }
 
