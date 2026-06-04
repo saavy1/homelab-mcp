@@ -104,6 +104,12 @@ pub fn compute_digest(canonical_json: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Sanitize a string for use as a Kubernetes label value.
+/// Replaces `/` with `-` and converts to lowercase per K8s label rules.
+pub fn sanitize_label_value(s: &str) -> String {
+    s.replace('/', "-").replace(':', "-").to_lowercase()
+}
+
 pub fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -143,5 +149,12 @@ mod tests {
         let d1 = compute_digest(r#"{"name":"a"}"#);
         let d2 = compute_digest(r#"{"name":"b"}"#);
         assert_ne!(d1, d2);
+    }
+
+    #[test]
+    fn sanitize_label_value_replaces_slashes() {
+        assert_eq!(sanitize_label_value("LiquidAI/LFM2.5-350M"), "liquidai-lfm2.5-350m");
+        assert_eq!(sanitize_label_value("deepseek-ai/DeepSeek-V4-Flash"), "deepseek-ai-deepseek-v4-flash");
+        assert_eq!(sanitize_label_value("no-slashes"), "no-slashes");
     }
 }

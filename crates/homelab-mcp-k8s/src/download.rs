@@ -1,3 +1,4 @@
+use homelab_mcp_core::sanitize_label_value;
 use k8s_openapi::api::batch::v1 as batchv1;
 use serde_json::json;
 
@@ -38,7 +39,7 @@ pub fn build_download_job(spec: &DownloadJobSpec) -> batchv1::Job {
             "namespace": spec.hf_secret_namespace,
             "labels": {
                 "app.kubernetes.io/managed-by": "homelab-mcp",
-                "homelab.saavylab.dev/model-id": spec.model_id,
+                "homelab.saavylab.dev/model-id": sanitize_label_value(&spec.model_id),
                 "homelab.saavylab.dev/revision": spec.revision,
                 "homelab.saavylab.dev/purpose": "weight-download"
             }

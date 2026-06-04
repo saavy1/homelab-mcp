@@ -1,5 +1,5 @@
 use crate::DeploymentPlan;
-use homelab_mcp_core::{HomelabMcpError, HomelabResult};
+use homelab_mcp_core::{HomelabMcpError, HomelabResult, sanitize_label_value};
 use serde_json::{Value, json};
 
 pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
@@ -11,7 +11,7 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
             "namespace": plan.namespace,
             "labels": {
                 "app.kubernetes.io/managed-by": "homelab-mcp",
-                "homelab.saavylab.dev/recipe-id": plan.recipe_id,
+                "homelab.saavylab.dev/recipe-id": sanitize_label_value(&plan.recipe_id),
                 "homelab.saavylab.dev/plan-digest": plan.plan_digest,
             },
             "annotations": {
