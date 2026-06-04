@@ -7,6 +7,7 @@ kind: InferenceService
 metadata:
   annotations:
     homelab.saavylab.dev/model-id: Qwen/Qwen3-8B
+    homelab.saavylab.dev/plan-digest: fd8f94cb6cbcb5d292ce2c277bcfe9ecaab89463c5c63c7e69c97f58bb3c8cd8
   labels:
     app.kubernetes.io/managed-by: homelab-mcp
     homelab.saavylab.dev/recipe-id: qwen3-8b

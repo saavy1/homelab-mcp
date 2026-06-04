@@ -1,17 +1,18 @@
 ---
 source: crates/model-catalog/src/render.rs
+assertion_line: 93
 expression: value
 ---
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   annotations:
-    homelab.saavylab.dev/model-id: deepseek-ai/DeepSeek-V4-Flash
-    homelab.saavylab.dev/plan-digest: 5da57a443012fb1f837404b6f44e0a40771a1ba34969fb71f1932b4159cb0a52
+    homelab.saavylab.dev/model-id: Qwen/Qwen3-8B
+    homelab.saavylab.dev/plan-digest: fd8f94cb6cbcb5d292ce2c277bcfe9ecaab89463c5c63c7e69c97f58bb3c8cd8
   labels:
     app.kubernetes.io/managed-by: homelab-mcp
-    homelab.saavylab.dev/recipe-id: deepseek-v4-flash
-  name: deepseek-v4-flash
+    homelab.saavylab.dev/recipe-id: qwen3-8b
+  name: qwen3-8b
   namespace: ai
 spec:
   predictor:

@@ -12,10 +12,11 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
             "labels": {
                 "app.kubernetes.io/managed-by": "homelab-mcp",
                 "homelab.saavylab.dev/recipe-id": sanitize_label_value(&plan.recipe_id),
-                "homelab.saavylab.dev/plan-digest": plan.plan_digest,
+                "homelab.saavylab.dev/plan-digest": &plan.plan_digest[..63],
             },
             "annotations": {
                 "homelab.saavylab.dev/model-id": plan.model_id,
+                "homelab.saavylab.dev/plan-digest": plan.plan_digest,
             }
         },
         "spec": {
