@@ -120,6 +120,16 @@ pub struct DeleteRecipeParams {
     pub recipe_id: String,
 }
 
+fn merge_recipe_sources(local: Vec<Recipe>, runtime: Vec<RuntimeRecipeRecord>) -> Vec<Recipe> {
+    let mut recipes = local;
+    for record in runtime {
+        recipes.retain(|recipe| recipe.id != record.recipe.id);
+        recipes.push(record.recipe);
+    }
+    recipes.sort_by(|left, right| left.id.cmp(&right.id));
+    recipes
+}
+
 fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), String> {
     let expected = compute_digest(&plan_to_digest_input(plan));
     if expected != provided_digest {
@@ -522,10 +532,11 @@ impl ModelCatalogTools {
     }
 
     async fn load_recipes_merged(&self) -> Result<Vec<Recipe>, String> {
-        let mut recipes = load_recipe_dir(&self.recipe_dir).map_err(|error| error.to_string())?;
+        let local = load_recipe_dir(&self.recipe_dir).map_err(|error| error.to_string())?;
         if self.runtime_state_namespace.is_empty() {
             // Test-only convention: empty namespace skips the runtime store so tests
             // do not require a live Kubernetes cluster.
+            let mut recipes = local;
             recipes.sort_by(|left, right| left.id.cmp(&right.id));
             return Ok(recipes);
         }
@@ -535,12 +546,7 @@ impl ModelCatalogTools {
         let runtime = list_runtime_recipes(client, &self.runtime_state_namespace)
             .await
             .map_err(|error| error.to_string())?;
-        for record in runtime {
-            recipes.retain(|recipe| recipe.id != record.recipe.id);
-            recipes.push(record.recipe);
-        }
-        recipes.sort_by(|left, right| left.id.cmp(&right.id));
-        Ok(recipes)
+        Ok(merge_recipe_sources(local, runtime))
     }
 
     async fn find_recipe(&self, id: &str) -> Result<Recipe, String> {
@@ -936,5 +942,101 @@ mod tests {
         }));
         let err = result.expect_err("should fail for missing recipe");
         assert!(err.contains("Spark Arena recipe not found"));
+    }
+
+    // Kubernetes-free unit tests for merge_recipe_sources
+
+    fn test_recipe(id: &str, model_id: &str, source: model_catalog::RecipeSource) -> Recipe {
+        Recipe {
+            id: id.into(),
+            source,
+            model: model_catalog::ModelSpec {
+                id: model_id.into(),
+                revision: None,
+                quantization: None,
+                gated: None,
+                license: None,
+            },
+            runtime: model_catalog::RuntimeSpec {
+                image: "vllm".into(),
+                args: vec![],
+                env: vec![],
+                tensor_parallel: None,
+                max_model_len: None,
+                dtype: None,
+                tool_call_parser: None,
+                reasoning_parser: None,
+            },
+            hardware: model_catalog::HardwareSpec {
+                gpu_class: "a100".into(),
+                gpu_count: 1,
+                estimated_vram_gb: None,
+                gpu_memory_utilization: None,
+            },
+            serving: model_catalog::ServingSpec {
+                namespace: "default".into(),
+                service_name: None,
+                replicas: 1,
+                storage_mode: model_catalog::StorageMode::Ephemeral,
+                ingress_policy: model_catalog::IngressPolicy::ClusterLocal,
+            },
+            provenance: homelab_mcp_core::Provenance {
+                source: "test".into(),
+                path: None,
+                commit: None,
+            },
+        }
+    }
+
+    fn test_runtime_record(id: &str, model_id: &str) -> RuntimeRecipeRecord {
+        RuntimeRecipeRecord {
+            recipe: test_recipe(id, model_id, model_catalog::RecipeSource::AdHoc),
+            created_by: "test".into(),
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        }
+    }
+
+    #[test]
+    fn merge_recipe_sources_runtime_overrides_local() {
+        let local = vec![test_recipe(
+            "r1",
+            "local-model",
+            model_catalog::RecipeSource::Local,
+        )];
+        let runtime = vec![test_runtime_record("r1", "runtime-model")];
+        let merged = merge_recipe_sources(local, runtime);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "r1");
+        assert_eq!(merged[0].model.id, "runtime-model");
+        assert_eq!(merged[0].source, model_catalog::RecipeSource::AdHoc);
+    }
+
+    #[test]
+    fn merge_recipe_sources_sorted_by_id() {
+        let local = vec![
+            test_recipe("c", "model-c", model_catalog::RecipeSource::Local),
+            test_recipe("a", "model-a", model_catalog::RecipeSource::Local),
+        ];
+        let runtime = vec![test_runtime_record("b", "model-b")];
+        let merged = merge_recipe_sources(local, runtime);
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "a");
+        assert_eq!(merged[1].id, "b");
+        assert_eq!(merged[2].id, "c");
+    }
+
+    #[test]
+    fn merge_recipe_sources_includes_runtime_only() {
+        let local = vec![test_recipe(
+            "r1",
+            "model-1",
+            model_catalog::RecipeSource::Local,
+        )];
+        let runtime = vec![test_runtime_record("r2", "model-2")];
+        let merged = merge_recipe_sources(local, runtime);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|r| r.id == "r1"));
+        assert!(merged.iter().any(|r| r.id == "r2"));
     }
 }
