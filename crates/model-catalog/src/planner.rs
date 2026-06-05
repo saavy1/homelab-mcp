@@ -1,4 +1,5 @@
 use crate::digest::compute_plan_digest;
+use crate::policy::validate_plan_policy;
 use crate::{
     ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode,
 };
@@ -170,7 +171,15 @@ pub fn plan_deploy(
         plan_digest: String::new(),
     };
     plan.plan_digest = compute_plan_digest(&plan);
-    let issues = validate_fit(recipe, profile, &plan);
+    let mut issues = validate_fit(recipe, profile, &plan);
+    let policy_issues = validate_plan_policy(recipe, profile, &plan);
+    let existing_fields: std::collections::HashSet<String> =
+        issues.iter().map(|i| i.field.clone()).collect();
+    for issue in policy_issues {
+        if !existing_fields.contains(&issue.field) {
+            issues.push(issue);
+        }
+    }
     let summary = if issues.is_empty() {
         format!(
             "recipe {} fits cluster {} for {} GPU",
