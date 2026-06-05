@@ -13,6 +13,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+chrono = { version = "0.4", features = ["clock", "serde"] }
 anyhow = "1.0.100"
 insta = { version = "1.43.2", features = ["yaml", "redactions"] }
 k8s-openapi = { version = "0.27.0", features = ["v1_34"] }

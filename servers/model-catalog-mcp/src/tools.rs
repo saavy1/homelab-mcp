@@ -16,6 +16,8 @@ use tracing::{info, instrument};
 #[derive(Clone)]
 pub struct ModelCatalogTools {
     pub recipe_dir: PathBuf,
+    pub spark_arena_dir: PathBuf,
+    pub runtime_state_namespace: String,
     pub cluster_profile: ClusterProfile,
 }
 
@@ -89,6 +91,22 @@ pub struct ModelLogsParams {
     pub namespace: String,
     pub name: String,
     pub tail: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchSparkArenaRecipesParams {
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ShowSparkArenaRecipeParams {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ImportSparkArenaRecipeParams {
+    pub id: String,
+    pub created_by: Option<String>,
 }
 
 fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), String> {
@@ -362,6 +380,71 @@ impl ModelCatalogTools {
         info!(name = %params.name, namespace = %params.namespace, line_count = logs.lines.len(), "logs");
         serde_json::to_string(&logs).map_err(|e| e.to_string())
     }
+
+    #[tool(description = "Search Spark Arena model recipes available to import")]
+    pub fn search_spark_arena_recipes(
+        &self,
+        Parameters(params): Parameters<SearchSparkArenaRecipesParams>,
+    ) -> Result<String, String> {
+        let recipes = model_catalog::load_spark_arena_recipes(&self.spark_arena_dir)
+            .map_err(|error| error.to_string())?;
+        let matches = model_catalog::search_spark_arena_recipes(&recipes, params.query.as_deref());
+        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+            format!("found {} Spark Arena recipe(s)", matches.len()),
+            matches,
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Show one Spark Arena recipe by id before importing")]
+    pub fn show_spark_arena_recipe(
+        &self,
+        Parameters(params): Parameters<ShowSparkArenaRecipeParams>,
+    ) -> Result<String, String> {
+        let recipes = model_catalog::load_spark_arena_recipes(&self.spark_arena_dir)
+            .map_err(|error| error.to_string())?;
+        let recipe = recipes
+            .into_iter()
+            .find(|recipe| recipe.id == params.id)
+            .ok_or_else(|| format!("Spark Arena recipe not found: {}", params.id))?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+            format!("loaded Spark Arena recipe {}", recipe.id),
+            recipe,
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Import a Spark Arena recipe into runtime model state")]
+    pub async fn import_spark_arena_recipe(
+        &self,
+        Parameters(params): Parameters<ImportSparkArenaRecipeParams>,
+    ) -> Result<String, String> {
+        let recipes = model_catalog::load_spark_arena_recipes(&self.spark_arena_dir)
+            .map_err(|error| error.to_string())?;
+        let recipe = recipes
+            .into_iter()
+            .find(|recipe| recipe.id == params.id)
+            .ok_or_else(|| format!("Spark Arena recipe not found: {}", params.id))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = model_catalog::RuntimeRecipeRecord {
+            recipe,
+            created_by: params.created_by.unwrap_or_else(|| "hermes".into()),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let name =
+            homelab_mcp_k8s::upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
+                .await
+                .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+            format!("imported runtime recipe {}", record.recipe.id),
+            serde_json::json!({ "configmap": name, "recipe_id": record.recipe.id }),
+        ))
+        .map_err(|error| error.to_string())
+    }
 }
 
 impl ModelCatalogTools {
@@ -397,6 +480,10 @@ mod tests {
     fn tools() -> ModelCatalogTools {
         ModelCatalogTools {
             recipe_dir: PathBuf::from("../../crates/model-catalog/tests/fixtures/local-recipes"),
+            spark_arena_dir: PathBuf::from(
+                "../../crates/model-catalog/tests/fixtures/local-recipes",
+            ),
+            runtime_state_namespace: "hermes".into(),
             cluster_profile: ClusterProfile::superbloom_default(),
         }
     }
@@ -695,5 +782,60 @@ mod tests {
             err.contains(&correct_digest),
             "expected error to contain correct override-derived digest {correct_digest}, got: {err}"
         );
+    }
+
+    #[test]
+    fn search_spark_arena_recipes_returns_lfm_fixture() {
+        let output = tools()
+            .search_spark_arena_recipes(Parameters(SearchSparkArenaRecipesParams {
+                query: Some("lfm".into()),
+            }))
+            .expect("search spark arena");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("parse result");
+        let data = result["data"].as_array().expect("data array");
+        assert!(!data.is_empty());
+        let first = &data[0];
+        assert_eq!(first["id"], "lfm25-350m");
+        assert!(
+            first["required_args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "--language-model-only")
+        );
+    }
+
+    #[test]
+    fn search_spark_arena_recipes_returns_empty_for_missing_query() {
+        let output = tools()
+            .search_spark_arena_recipes(Parameters(SearchSparkArenaRecipesParams {
+                query: Some("no-such-model".into()),
+            }))
+            .expect("search spark arena");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("parse result");
+        let data = result["data"].as_array().expect("data array");
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn show_spark_arena_recipe_returns_known_fixture() {
+        let output = tools()
+            .show_spark_arena_recipe(Parameters(ShowSparkArenaRecipeParams {
+                id: "lfm25-350m".into(),
+            }))
+            .expect("show spark arena recipe");
+        let result: serde_json::Value = serde_json::from_str(&output).expect("parse result");
+        let data = &result["data"];
+        assert_eq!(data["id"], "lfm25-350m");
+        assert_eq!(data["model"]["id"], "LiquidAI/LFM2.5-350M");
+    }
+
+    #[test]
+    fn show_spark_arena_recipe_returns_error_for_missing_id() {
+        let result = tools().show_spark_arena_recipe(Parameters(ShowSparkArenaRecipeParams {
+            id: "nonexistent-recipe".into(),
+        }));
+        let err = result.expect_err("should fail for missing recipe");
+        assert!(err.contains("Spark Arena recipe not found"));
     }
 }

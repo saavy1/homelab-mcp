@@ -30,6 +30,11 @@ async fn main() -> Result<()> {
     let recipe_dir = env::var("MODEL_CATALOG_RECIPE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/etc/model-catalog/recipes"));
+    let spark_arena_dir = env::var("MODEL_CATALOG_SPARK_ARENA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/etc/model-catalog/spark-arena"));
+    let runtime_state_namespace =
+        env::var("MODEL_CATALOG_STATE_NAMESPACE").unwrap_or_else(|_| "hermes".into());
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
@@ -48,6 +53,8 @@ async fn main() -> Result<()> {
         move || {
             Ok(ModelCatalogTools {
                 recipe_dir: recipe_dir.clone(),
+                spark_arena_dir: spark_arena_dir.clone(),
+                runtime_state_namespace: runtime_state_namespace.clone(),
                 cluster_profile: ClusterProfile::superbloom_default(),
             })
         },
