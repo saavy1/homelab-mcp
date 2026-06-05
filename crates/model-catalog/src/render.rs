@@ -112,9 +112,7 @@ fn render_runtime_args(
             i += 1;
             continue;
         }
-        if !args.contains(arg) {
-            args.push(arg.clone());
-        }
+        args.push(arg.clone());
         i += 1;
     }
     args
@@ -307,5 +305,48 @@ mod tests {
         // Server-managed defaults must still be present
         assert!(arg_strs.contains(&"--host=0.0.0.0"));
         assert!(arg_strs.contains(&"--port=8080"));
+    }
+
+    #[test]
+    fn distinct_flags_with_same_value_remain_intact() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                runtime_args: vec!["--foo".into(), "same".into(), "--bar".into(), "same".into()],
+                ..DeployOverrides::empty()
+            },
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array");
+
+        let arg_strs: Vec<&str> = args.iter().map(|v| v.as_str().unwrap()).collect();
+
+        // Both flags and both shared values must be present in order.
+        let foo_idx = arg_strs
+            .iter()
+            .position(|&a| a == "--foo")
+            .expect("--foo present");
+        let bar_idx = arg_strs
+            .iter()
+            .position(|&a| a == "--bar")
+            .expect("--bar present");
+        assert!(foo_idx < bar_idx, "--foo must appear before --bar");
+        assert_eq!(arg_strs[foo_idx + 1], "same");
+        assert_eq!(arg_strs[bar_idx + 1], "same");
+
+        // Count occurrences of "same" — must appear exactly twice.
+        assert_eq!(
+            arg_strs.iter().filter(|&&a| a == "same").count(),
+            2,
+            "value 'same' must appear twice, not deduplicated"
+        );
     }
 }

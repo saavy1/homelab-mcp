@@ -31,14 +31,89 @@ impl DeployOverrides {
     }
 }
 
-fn merge_args(default_args: &[String], override_args: &[String]) -> Vec<String> {
-    let mut merged = default_args.to_vec();
-    for arg in override_args {
-        if !merged.contains(arg) {
-            merged.push(arg.clone());
+#[derive(Clone, Debug)]
+enum ArgEntry {
+    /// A CLI flag and its associated token(s). The key is the flag name
+    /// (e.g. `--max-model-len`), and tokens are the raw strings that make up
+    /// the entry in the original arg list.
+    Flag { key: String, tokens: Vec<String> },
+    /// A positional / non-flag argument.
+    Positional(String),
+}
+
+/// Parse a flat token list into flag entries and positional args.
+///
+/// * `--flag=value`  → one `Flag` entry keyed by `--flag`.
+/// * `--flag value`  → one `Flag` entry keyed by `--flag` when `value`
+///   does not start with `--`.
+/// * `--flag`        → one `Flag` entry (boolean flag) when the next token
+///   is absent or starts with `--`.
+/// * anything else   → `Positional`.
+fn parse_args(args: &[String]) -> Vec<ArgEntry> {
+    let mut entries = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg.starts_with("--") {
+            if arg.contains('=') {
+                // --flag=value form
+                let key = arg.split('=').next().unwrap_or(arg).to_string();
+                entries.push(ArgEntry::Flag {
+                    key,
+                    tokens: vec![arg.clone()],
+                });
+                i += 1;
+            } else if i + 1 < args.len() && !args[i + 1].starts_with("--") {
+                // --flag value form
+                let key = arg.clone();
+                entries.push(ArgEntry::Flag {
+                    key,
+                    tokens: vec![arg.clone(), args[i + 1].clone()],
+                });
+                i += 2;
+            } else {
+                // boolean flag
+                let key = arg.clone();
+                entries.push(ArgEntry::Flag {
+                    key,
+                    tokens: vec![arg.clone()],
+                });
+                i += 1;
+            }
+        } else {
+            entries.push(ArgEntry::Positional(arg.clone()));
+            i += 1;
         }
     }
-    merged
+    entries
+}
+
+fn entries_to_args(entries: &[ArgEntry]) -> Vec<String> {
+    let mut result = Vec::new();
+    for entry in entries {
+        match entry {
+            ArgEntry::Flag { tokens, .. } => result.extend(tokens.iter().cloned()),
+            ArgEntry::Positional(v) => result.push(v.clone()),
+        }
+    }
+    result
+}
+
+fn merge_args(default_args: &[String], override_args: &[String]) -> Vec<String> {
+    let mut defaults = parse_args(default_args);
+    let overrides = parse_args(override_args);
+
+    for override_entry in overrides {
+        if let ArgEntry::Flag { key, .. } = &override_entry {
+            defaults.retain(|entry| match entry {
+                ArgEntry::Flag { key: k, .. } => k != key,
+                ArgEntry::Positional(_) => true,
+            });
+        }
+        defaults.push(override_entry);
+    }
+
+    entries_to_args(&defaults)
 }
 
 fn merge_env(default_env: &[EnvVar], override_env: &[EnvVar]) -> Vec<EnvVar> {
@@ -291,6 +366,34 @@ mod tests {
             result.issues[0]
                 .message
                 .contains("cluster permits 1 GPU(s) per pod")
+        );
+    }
+
+    #[test]
+    fn split_form_flag_override_replaces_default_without_orphan_value() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                runtime_args: vec!["--max-model-len".into(), "8192".into()],
+                ..DeployOverrides::empty()
+            },
+        );
+
+        let args = result.data.runtime_args;
+        // The override should replace the default, not just append the value.
+        let idx_flag = args
+            .iter()
+            .position(|a| a == "--max-model-len")
+            .expect("flag present");
+        assert_eq!(args[idx_flag + 1], "8192");
+        assert!(
+            !args.contains(&"32768".to_string()),
+            "orphan default value 32768 must not remain"
         );
     }
 }
