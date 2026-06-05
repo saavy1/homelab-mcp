@@ -1,12 +1,12 @@
 use homelab_mcp_core::compute_digest;
 use homelab_mcp_k8s::{
     DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, create_download_job,
-    create_inferenceservice, download_job_name, get_download_status, get_inferenceservice_status,
-    get_predictor_logs,
+    create_inferenceservice, delete_runtime_recipe, download_job_name, get_download_status,
+    get_inferenceservice_status, get_predictor_logs, list_runtime_recipes, upsert_runtime_recipe,
 };
 use model_catalog::{
-    ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, load_recipe_dir, plan_deploy,
-    plan_to_digest_input, render_kserve_value, search_recipes,
+    ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, RuntimeRecipeRecord, load_recipe_dir,
+    plan_deploy, plan_to_digest_input, render_kserve_value, search_recipes,
 };
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
@@ -109,6 +109,17 @@ pub struct ImportSparkArenaRecipeParams {
     pub created_by: Option<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
+pub struct CreateRecipeParams {
+    pub recipe: Recipe,
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeleteRecipeParams {
+    pub recipe_id: String,
+}
+
 fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), String> {
     let expected = compute_digest(&plan_to_digest_input(plan));
     if expected != provided_digest {
@@ -137,12 +148,15 @@ fn resource_requests_from_params(
 
 #[tool_router(vis = "pub")]
 impl ModelCatalogTools {
-    #[tool(description = "Search local model recipes by recipe id or model id")]
-    pub fn search_recipes(
+    #[tool(description = "Search model recipes by recipe id or model id")]
+    pub async fn search_recipes(
         &self,
         Parameters(params): Parameters<SearchRecipesParams>,
     ) -> Result<String, String> {
-        let recipes = self.load_recipes().map_err(|error| error.to_string())?;
+        let recipes = self
+            .load_recipes_merged()
+            .await
+            .map_err(|error| error.to_string())?;
         let matches = search_recipes(&recipes, params.query.as_deref());
         let ids: Vec<String> = matches
             .into_iter()
@@ -152,12 +166,12 @@ impl ModelCatalogTools {
         serde_json::to_string(&ids).map_err(|error| error.to_string())
     }
 
-    #[tool(description = "Show one local model recipe by id")]
-    pub fn show_recipe(
+    #[tool(description = "Show one model recipe by id")]
+    pub async fn show_recipe(
         &self,
         Parameters(params): Parameters<ShowRecipeParams>,
     ) -> Result<String, String> {
-        let recipe = self.find_recipe(&params.id)?;
+        let recipe = self.find_recipe(&params.id).await?;
         info!(recipe_id = %params.id, "show_recipe");
         serde_json::to_string(&recipe).map_err(|error| error.to_string())
     }
@@ -165,11 +179,11 @@ impl ModelCatalogTools {
     #[tool(
         description = "Plan a KServe deployment. Returns DeploymentPlan with plan_digest. Pure: no side effects."
     )]
-    pub fn plan_deploy(
+    pub async fn plan_deploy(
         &self,
         Parameters(params): Parameters<PlanDeployParams>,
     ) -> Result<String, String> {
-        let recipe = self.find_recipe(&params.recipe_id)?;
+        let recipe = self.find_recipe(&params.recipe_id).await?;
         let result = plan_deploy(
             &recipe,
             &self.cluster_profile,
@@ -200,23 +214,25 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
-        let plan = self.derive_plan(
-            &params.recipe_id,
-            DeployOverrides {
-                name: params.name,
-                namespace: params.namespace,
-                replicas: None,
-                runtime_args: params.runtime_args.unwrap_or_default(),
-                runtime_env: params.runtime_env.unwrap_or_default(),
-                env_overrides: params.env_overrides.unwrap_or_default(),
-                resource_requests: resource_requests_from_params(
-                    params.cpu,
-                    params.memory,
-                    params.gpu_count,
-                ),
-                readiness_timeout_seconds: params.readiness_timeout_seconds,
-            },
-        )?;
+        let plan = self
+            .derive_plan(
+                &params.recipe_id,
+                DeployOverrides {
+                    name: params.name,
+                    namespace: params.namespace,
+                    replicas: None,
+                    runtime_args: params.runtime_args.unwrap_or_default(),
+                    runtime_env: params.runtime_env.unwrap_or_default(),
+                    env_overrides: params.env_overrides.unwrap_or_default(),
+                    resource_requests: resource_requests_from_params(
+                        params.cpu,
+                        params.memory,
+                        params.gpu_count,
+                    ),
+                    readiness_timeout_seconds: params.readiness_timeout_seconds,
+                },
+            )
+            .await?;
         verify_digest(&plan, &params.plan_digest)?;
         let storage = &self.cluster_profile.model_storage;
         let revision = plan.model_revision.clone().unwrap_or_else(|| "main".into());
@@ -296,23 +312,25 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<ApplyPlanParams>,
     ) -> Result<String, String> {
-        let plan = self.derive_plan(
-            &params.recipe_id,
-            DeployOverrides {
-                name: params.name,
-                namespace: params.namespace,
-                replicas: None,
-                runtime_args: params.runtime_args.unwrap_or_default(),
-                runtime_env: params.runtime_env.unwrap_or_default(),
-                env_overrides: params.env_overrides.unwrap_or_default(),
-                resource_requests: resource_requests_from_params(
-                    params.cpu,
-                    params.memory,
-                    params.gpu_count,
-                ),
-                readiness_timeout_seconds: params.readiness_timeout_seconds,
-            },
-        )?;
+        let plan = self
+            .derive_plan(
+                &params.recipe_id,
+                DeployOverrides {
+                    name: params.name,
+                    namespace: params.namespace,
+                    replicas: None,
+                    runtime_args: params.runtime_args.unwrap_or_default(),
+                    runtime_env: params.runtime_env.unwrap_or_default(),
+                    env_overrides: params.env_overrides.unwrap_or_default(),
+                    resource_requests: resource_requests_from_params(
+                        params.cpu,
+                        params.memory,
+                        params.gpu_count,
+                    ),
+                    readiness_timeout_seconds: params.readiness_timeout_seconds,
+                },
+            )
+            .await?;
         verify_digest(&plan, &params.plan_digest)?;
 
         // Sentinel check: verify download completed
@@ -426,7 +444,7 @@ impl ModelCatalogTools {
             .find(|recipe| recipe.id == params.id)
             .ok_or_else(|| format!("Spark Arena recipe not found: {}", params.id))?;
         let now = chrono::Utc::now().to_rfc3339();
-        let record = model_catalog::RuntimeRecipeRecord {
+        let record = RuntimeRecipeRecord {
             recipe,
             created_by: params.created_by.unwrap_or_else(|| "hermes".into()),
             created_at: now.clone(),
@@ -435,25 +453,67 @@ impl ModelCatalogTools {
         let client = homelab_mcp_k8s::k8s_client()
             .await
             .map_err(|error| error.to_string())?;
-        let name =
-            homelab_mcp_k8s::upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
-                .await
-                .map_err(|error| error.to_string())?;
+        let name = upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
+            .await
+            .map_err(|error| error.to_string())?;
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("imported runtime recipe {}", record.recipe.id),
             serde_json::json!({ "configmap": name, "recipe_id": record.recipe.id }),
         ))
         .map_err(|error| error.to_string())
     }
+
+    #[tool(description = "Create or replace a runtime recipe in model-catalog state")]
+    pub async fn create_recipe(
+        &self,
+        Parameters(params): Parameters<CreateRecipeParams>,
+    ) -> Result<String, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = RuntimeRecipeRecord {
+            recipe: params.recipe,
+            created_by: params.created_by.unwrap_or_else(|| "hermes".into()),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let name = upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+            format!("stored runtime recipe {}", record.recipe.id),
+            serde_json::json!({ "configmap": name, "recipe_id": record.recipe.id }),
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Delete a runtime recipe from model-catalog state")]
+    pub async fn delete_recipe(
+        &self,
+        Parameters(params): Parameters<DeleteRecipeParams>,
+    ) -> Result<String, String> {
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        delete_runtime_recipe(client, &self.runtime_state_namespace, &params.recipe_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+            format!("deleted runtime recipe {}", params.recipe_id),
+            serde_json::json!({ "recipe_id": params.recipe_id }),
+        ))
+        .map_err(|error| error.to_string())
+    }
 }
 
 impl ModelCatalogTools {
-    fn derive_plan(
+    async fn derive_plan(
         &self,
         recipe_id: &str,
         overrides: DeployOverrides,
     ) -> Result<DeploymentPlan, String> {
-        let recipe = self.find_recipe(recipe_id)?;
+        let recipe = self.find_recipe(recipe_id).await?;
         let result = plan_deploy(&recipe, &self.cluster_profile, overrides);
         if !result.issues.is_empty() {
             return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
@@ -461,12 +521,31 @@ impl ModelCatalogTools {
         Ok(result.data)
     }
 
-    fn load_recipes(&self) -> Result<Vec<Recipe>, String> {
-        load_recipe_dir(&self.recipe_dir).map_err(|error| error.to_string())
+    async fn load_recipes_merged(&self) -> Result<Vec<Recipe>, String> {
+        let mut recipes = load_recipe_dir(&self.recipe_dir).map_err(|error| error.to_string())?;
+        if self.runtime_state_namespace.is_empty() {
+            // Test-only convention: empty namespace skips the runtime store so tests
+            // do not require a live Kubernetes cluster.
+            recipes.sort_by(|left, right| left.id.cmp(&right.id));
+            return Ok(recipes);
+        }
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let runtime = list_runtime_recipes(client, &self.runtime_state_namespace)
+            .await
+            .map_err(|error| error.to_string())?;
+        for record in runtime {
+            recipes.retain(|recipe| recipe.id != record.recipe.id);
+            recipes.push(record.recipe);
+        }
+        recipes.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(recipes)
     }
 
-    fn find_recipe(&self, id: &str) -> Result<Recipe, String> {
-        self.load_recipes()?
+    async fn find_recipe(&self, id: &str) -> Result<Recipe, String> {
+        self.load_recipes_merged()
+            .await?
             .into_iter()
             .find(|recipe| recipe.id == id)
             .ok_or_else(|| format!("recipe not found: {id}"))
@@ -483,23 +562,37 @@ mod tests {
             spark_arena_dir: PathBuf::from(
                 "../../crates/model-catalog/tests/fixtures/local-recipes",
             ),
-            runtime_state_namespace: "hermes".into(),
+            // Empty namespace disables the runtime store so tests do not require
+            // a live Kubernetes cluster. Production default remains "hermes".
+            runtime_state_namespace: "".into(),
             cluster_profile: ClusterProfile::superbloom_default(),
         }
     }
 
-    #[test]
-    fn search_recipes_returns_known_fixture() {
+    #[tokio::test]
+    async fn search_recipes_returns_known_fixture() {
         let output = tools()
             .search_recipes(Parameters(SearchRecipesParams {
                 query: Some("qwen".into()),
             }))
+            .await
             .expect("search");
         assert!(output.contains("qwen3-8b"));
     }
 
-    #[test]
-    fn plan_deploy_returns_plan_with_digest() {
+    #[tokio::test]
+    async fn show_recipe_returns_known_fixture() {
+        let output = tools()
+            .show_recipe(Parameters(ShowRecipeParams {
+                id: "qwen3-8b".into(),
+            }))
+            .await
+            .expect("show");
+        assert!(output.contains("qwen3-8b"));
+    }
+
+    #[tokio::test]
+    async fn plan_deploy_returns_plan_with_digest() {
         let output = tools()
             .plan_deploy(Parameters(PlanDeployParams {
                 recipe_id: "qwen3-8b".into(),
@@ -513,6 +606,7 @@ mod tests {
                 gpu_count: None,
                 readiness_timeout_seconds: None,
             }))
+            .await
             .expect("plan");
         assert!(output.contains("fits cluster superbloom"));
         assert!(output.contains("plan_digest"));
@@ -533,6 +627,7 @@ mod tests {
                 gpu_count: None,
                 readiness_timeout_seconds: None,
             }))
+            .await
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
         let digest = plan_value["data"]["plan_digest"]
@@ -579,6 +674,7 @@ mod tests {
                 gpu_count: None,
                 readiness_timeout_seconds: None,
             }))
+            .await
             .expect("plan");
         assert!(plan_output.contains("plan_digest"));
         let result = tools()
@@ -618,6 +714,7 @@ mod tests {
                 gpu_count: None,
                 readiness_timeout_seconds: None,
             }))
+            .await
             .expect("plan");
         assert!(plan_output.contains("plan_digest"));
         let result = tools()
@@ -698,10 +795,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn plan_deploy_returns_overrides_in_plan() {
+    #[tokio::test]
+    async fn plan_deploy_returns_overrides_in_plan() {
         let params = full_override_params();
-        let output = tools().plan_deploy(Parameters(params)).expect("plan");
+        let output = tools().plan_deploy(Parameters(params)).await.expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&output).expect("parse plan");
         let data = &plan_value["data"];
         assert_eq!(data["name"], "custom-name");
@@ -731,6 +828,7 @@ mod tests {
         let params = full_override_params();
         let plan_output = tools()
             .plan_deploy(Parameters(params.clone()))
+            .await
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
         let correct_digest = plan_value["data"]["plan_digest"]
@@ -760,6 +858,7 @@ mod tests {
         let params = full_override_params();
         let plan_output = tools()
             .plan_deploy(Parameters(params.clone()))
+            .await
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
         let correct_digest = plan_value["data"]["plan_digest"]
