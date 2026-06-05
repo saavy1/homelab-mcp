@@ -1,8 +1,9 @@
 use homelab_mcp_core::compute_digest;
 use homelab_mcp_k8s::{
     DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, collect_capacity_report,
-    create_download_job, create_inferenceservice, delete_runtime_recipe, download_job_name,
-    get_download_status, get_inferenceservice_status, get_predictor_logs, list_runtime_recipes,
+    create_download_job, create_inferenceservice, delete_inferenceservice, delete_runtime_recipe,
+    download_job_name, dry_run_inferenceservice, get_download_status, get_inferenceservice_status,
+    get_predictor_logs, list_runtime_deployments, list_runtime_recipes, upsert_runtime_deployment,
     upsert_runtime_recipe,
 };
 use model_catalog::{
@@ -93,6 +94,31 @@ pub struct ModelLogsParams {
     pub namespace: String,
     pub name: String,
     pub tail: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DeployModelParams {
+    pub recipe_id: String,
+    pub target: String,
+    pub name: Option<String>,
+    pub namespace: Option<String>,
+    pub runtime_args: Option<Vec<String>>,
+    pub runtime_env: Option<Vec<model_catalog::EnvVar>>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub gpu_count: Option<u32>,
+    pub readiness_timeout_seconds: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StopModelParams {
+    pub namespace: String,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListDeploymentsParams {
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -424,6 +450,107 @@ impl ModelCatalogTools {
             .map_err(|e| e.to_string())?;
         info!(name = %params.name, namespace = %params.namespace, line_count = logs.lines.len(), "logs");
         serde_json::to_string(&logs).map_err(|e| e.to_string())
+    }
+
+    #[tool(description = "Plan, dry-run, apply, and record a model deployment")]
+    pub async fn deploy_model(
+        &self,
+        Parameters(params): Parameters<DeployModelParams>,
+    ) -> Result<String, String> {
+        let recipe = self.find_recipe(&params.recipe_id).await?;
+        let overrides = DeployOverrides {
+            name: params.name.clone(),
+            namespace: params.namespace.clone(),
+            replicas: None,
+            runtime_args: params.runtime_args.unwrap_or_default(),
+            runtime_env: params.runtime_env.unwrap_or_default(),
+            env_overrides: Vec::new(),
+            resource_requests: resource_requests_from_params(
+                params.cpu,
+                params.memory,
+                params.gpu_count,
+            ),
+            readiness_timeout_seconds: params.readiness_timeout_seconds,
+        };
+        let result = model_catalog::plan_deploy(&recipe, &self.cluster_profile, overrides);
+        if !result.issues.is_empty() {
+            return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
+        }
+        let plan = result.data;
+        let manifest = model_catalog::render_kserve_value(&plan);
+        dry_run_inferenceservice(manifest.clone(), &plan.namespace)
+            .await
+            .map_err(|error| format!("dry-run InferenceService: {error}"))?;
+        let created = create_inferenceservice(manifest, &plan.namespace)
+            .await
+            .map_err(|error| format!("create InferenceService: {error}"))?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = model_catalog::RuntimeDeploymentRecord {
+            name: plan.name.clone(),
+            namespace: plan.namespace.clone(),
+            recipe_id: plan.recipe_id.clone(),
+            target: params.target,
+            runtime_args: plan.runtime_args.clone(),
+            runtime_env: plan.runtime_env.clone(),
+            resources: plan.resource_requests.clone(),
+            status: model_catalog::DeploymentState::Applying,
+            last_plan_digest: plan.plan_digest.clone(),
+            created_by: "hermes".into(),
+            created_at: now,
+            failure_reason: None,
+        };
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        upsert_runtime_deployment(client, &self.runtime_state_namespace, &record)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+            format!("created model deployment {}", plan.name),
+            serde_json::json!({
+                "created_name": created,
+                "namespace": plan.namespace,
+                "name": plan.name,
+                "plan_digest": plan.plan_digest
+            }),
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Stop a model deployment by deleting its KServe InferenceService")]
+    pub async fn stop_model(
+        &self,
+        Parameters(params): Parameters<StopModelParams>,
+    ) -> Result<String, String> {
+        delete_inferenceservice(&params.namespace, &params.name)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+            format!("stopped model {}", params.name),
+            serde_json::json!({ "namespace": params.namespace, "name": params.name }),
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "List runtime model deployments recorded by model-catalog")]
+    pub async fn list_deployments(
+        &self,
+        Parameters(params): Parameters<ListDeploymentsParams>,
+    ) -> Result<String, String> {
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut deployments = list_runtime_deployments(client, &self.runtime_state_namespace)
+            .await
+            .map_err(|error| error.to_string())?;
+        if let Some(target) = params.target {
+            deployments.retain(|deployment| deployment.target == target);
+        }
+        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+            format!("listed {} runtime deployment(s)", deployments.len()),
+            deployments,
+        ))
+        .map_err(|error| error.to_string())
     }
 
     #[tool(description = "Search Spark Arena model recipes available to import")]

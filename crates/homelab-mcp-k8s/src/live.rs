@@ -4,7 +4,7 @@ use k8s_openapi::api::core::v1 as corev1;
 use kube::core::dynamic::DynamicObject;
 use kube::{
     Api, Client,
-    api::{ListParams, LogParams, PostParams},
+    api::{DeleteParams, ListParams, LogParams, PostParams},
     discovery::ApiResource,
 };
 
@@ -101,6 +101,42 @@ pub async fn create_inferenceservice(
     obj.data = manifest;
     let created = isvc.create(&PostParams::default(), &obj).await?;
     Ok(created.metadata.name.unwrap_or_default())
+}
+
+/// Delete an InferenceService by name. Idempotent: returns Ok if 404.
+pub async fn delete_inferenceservice(namespace: &str, name: &str) -> Result<(), kube::Error> {
+    let ar = isvc_api_resource();
+    let client = k8s_client().await?;
+    let isvc: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    match isvc.delete(name, &DeleteParams::default()).await {
+        Ok(_) => Ok(()),
+        Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Dry-run create an InferenceService. Returns the resource name.
+pub async fn dry_run_inferenceservice(
+    manifest: serde_json::Value,
+    namespace: &str,
+) -> Result<String, kube::Error> {
+    let ar = isvc_api_resource();
+    let client = k8s_client().await?;
+    let isvc: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let name = manifest
+        .get("metadata")
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let mut obj = DynamicObject::new(&name, &ar).within(namespace);
+    obj.data = manifest;
+    let params = PostParams {
+        dry_run: true,
+        ..PostParams::default()
+    };
+    let checked = isvc.create(&params, &obj).await?;
+    Ok(checked.metadata.name.unwrap_or(name))
 }
 
 /// Get InferenceService status by name.
