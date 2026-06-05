@@ -12,6 +12,7 @@ pub mod types;
 pub use arena::{SparkArenaSearchResult, load_spark_arena_recipes, search_spark_arena_recipes};
 pub use capacity::{
     ActiveModelCapacity, CapacityReport, FitConfidence, FitEstimate, estimate_fit_from_report,
+    estimate_fit_from_report_with_vram,
 };
 pub use digest::{compute_plan_digest, plan_to_digest_input};
 pub use planner::{DeployOverrides, plan_deploy, validate_fit};

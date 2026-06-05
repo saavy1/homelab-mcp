@@ -589,7 +589,11 @@ impl ModelCatalogTools {
             collect_capacity_report(client, &params.target, self.prometheus_base_url.as_deref())
                 .await
                 .map_err(|error| error.to_string())?;
-        let estimate = model_catalog::estimate_fit_from_report(&report, requested);
+        let estimate = model_catalog::estimate_fit_from_report_with_vram(
+            &report,
+            requested,
+            recipe.hardware.estimated_vram_gb,
+        );
         serde_json::to_string(&homelab_mcp_core::ToolResult::read(
             format!("fit estimate for {} on {}", params.recipe_id, params.target),
             estimate,

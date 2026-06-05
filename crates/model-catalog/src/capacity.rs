@@ -63,9 +63,10 @@ fn parse_memory_bytes(s: &str) -> Option<f64> {
     None
 }
 
-pub fn estimate_fit_from_report(
+pub fn estimate_fit_from_report_with_vram(
     report: &CapacityReport,
     requested: ResourceRequests,
+    estimated_vram_gb: Option<u32>,
 ) -> FitEstimate {
     let mut risks = report.risks.clone();
     let active_gpu: u32 = report
@@ -89,17 +90,24 @@ pub fn estimate_fit_from_report(
         report.observed_gpu_memory_used_bytes,
     ) {
         let free = total - used;
-        match parse_memory_bytes(&requested.memory) {
+        let req_mem = estimated_vram_gb.map(|v| v as f64 * 1024.0 * 1024.0 * 1024.0);
+        match req_mem {
             Some(req_mem) => {
                 fits = requested.gpu_count <= 1 && free >= req_mem;
             }
-            None => {
-                fits = false;
-                risks.push(format!(
-                    "requested memory '{}' cannot be parsed for fit check",
-                    requested.memory
-                ));
-            }
+            None => match parse_memory_bytes(&requested.memory) {
+                Some(req_mem) => {
+                    fits = requested.gpu_count <= 1 && free >= req_mem;
+                    risks.push("fit uses Kubernetes memory request as GPU-memory proxy".into());
+                }
+                None => {
+                    fits = false;
+                    risks.push(format!(
+                        "requested memory '{}' cannot be parsed for fit check",
+                        requested.memory
+                    ));
+                }
+            },
         }
     } else {
         fits = active_gpu + requested.gpu_count <= 1;
@@ -118,6 +126,13 @@ pub fn estimate_fit_from_report(
         risks,
         recommended_resources: requested,
     }
+}
+
+pub fn estimate_fit_from_report(
+    report: &CapacityReport,
+    requested: ResourceRequests,
+) -> FitEstimate {
+    estimate_fit_from_report_with_vram(report, requested, None)
 }
 
 #[cfg(test)]
@@ -411,5 +426,79 @@ mod tests {
         );
         assert!(!fit.fits);
         assert!(fit.risks.iter().any(|r| r.contains("cannot be parsed")));
+    }
+
+    #[test]
+    fn large_estimated_vram_exceeds_free_gpu_memory() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: Vec::new(),
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(0.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report_with_vram(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "16Gi".into(),
+                gpu_count: 1,
+            },
+            Some(96),
+        );
+        assert!(!fit.fits);
+    }
+
+    #[test]
+    fn estimated_vram_fits_when_free_gpu_memory_enough() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: Vec::new(),
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(0.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report_with_vram(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "16Gi".into(),
+                gpu_count: 1,
+            },
+            Some(8),
+        );
+        assert!(fit.fits);
+    }
+
+    #[test]
+    fn fallback_to_requested_memory_adds_proxy_risk() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: Vec::new(),
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(0.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report_with_vram(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "16Gi".into(),
+                gpu_count: 1,
+            },
+            None,
+        );
+        assert!(fit.fits);
+        assert!(
+            fit.risks
+                .iter()
+                .any(|r| r.contains("Kubernetes memory request as GPU-memory proxy"))
+        );
     }
 }
