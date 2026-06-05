@@ -105,8 +105,12 @@ fn render_runtime_args(
     while i < runtime_args.len() {
         let arg = &runtime_args[i];
         if is_server_managed_arg(arg) {
-            // For split-form managed flags (e.g. --port 9001), skip the following value too.
-            if !arg.contains('=') && i + 1 < runtime_args.len() {
+            // For split-form managed flags (e.g. --port 9001), skip the following value too,
+            // but only if it's actually a value and not another flag.
+            if !arg.contains('=')
+                && i + 1 < runtime_args.len()
+                && !runtime_args[i + 1].starts_with("--")
+            {
                 i += 1;
             }
             i += 1;
@@ -304,6 +308,36 @@ mod tests {
 
         // Server-managed defaults must still be present
         assert!(arg_strs.contains(&"--host=0.0.0.0"));
+        assert!(arg_strs.contains(&"--port=8080"));
+    }
+
+    #[test]
+    fn split_form_managed_arg_followed_by_flag_preserves_flag() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                runtime_args: vec!["--port".into(), "--enable-auto-tool-choice".into()],
+                ..DeployOverrides::empty()
+            },
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array");
+
+        let arg_strs: Vec<&str> = args.iter().map(|v| v.as_str().unwrap()).collect();
+
+        // --port must not appear
+        assert!(!arg_strs.contains(&"--port"));
+        // --enable-auto-tool-choice must be preserved
+        assert!(arg_strs.contains(&"--enable-auto-tool-choice"));
+        // Server-managed defaults must still be present
         assert!(arg_strs.contains(&"--port=8080"));
     }
 

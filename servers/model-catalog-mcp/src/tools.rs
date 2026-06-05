@@ -29,7 +29,7 @@ pub struct ShowRecipeParams {
     pub id: String,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 pub struct PlanDeployParams {
     pub recipe_id: String,
     pub name: Option<String>,
@@ -43,7 +43,7 @@ pub struct PlanDeployParams {
     pub readiness_timeout_seconds: Option<u32>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 pub struct EnsureWeightsParams {
     pub recipe_id: String,
     pub name: Option<String>,
@@ -63,7 +63,7 @@ pub struct DownloadStatusParams {
     pub job_ref: DownloadJobRef,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 pub struct ApplyPlanParams {
     pub recipe_id: String,
     pub name: Option<String>,
@@ -550,5 +550,150 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("digest mismatch"));
+    }
+
+    fn full_override_params() -> PlanDeployParams {
+        PlanDeployParams {
+            recipe_id: "qwen3-8b".into(),
+            name: Some("custom-name".into()),
+            namespace: Some("custom-ns".into()),
+            runtime_args: Some(vec!["--max-model-len".into(), "4096".into()]),
+            runtime_env: Some(vec![model_catalog::EnvVar {
+                name: "FOO".into(),
+                value: "bar".into(),
+            }]),
+            env_overrides: Some(vec![model_catalog::EnvVar {
+                name: "BAZ".into(),
+                value: "qux".into(),
+            }]),
+            cpu: Some("4".into()),
+            memory: Some("32Gi".into()),
+            gpu_count: Some(1),
+            readiness_timeout_seconds: Some(120),
+        }
+    }
+
+    fn ensure_weights_from_plan_params(
+        params: &PlanDeployParams,
+        plan_digest: String,
+    ) -> EnsureWeightsParams {
+        EnsureWeightsParams {
+            recipe_id: params.recipe_id.clone(),
+            name: params.name.clone(),
+            namespace: params.namespace.clone(),
+            plan_digest,
+            runtime_args: params.runtime_args.clone(),
+            runtime_env: params.runtime_env.clone(),
+            env_overrides: params.env_overrides.clone(),
+            cpu: params.cpu.clone(),
+            memory: params.memory.clone(),
+            gpu_count: params.gpu_count,
+            readiness_timeout_seconds: params.readiness_timeout_seconds,
+        }
+    }
+
+    fn apply_plan_from_plan_params(
+        params: &PlanDeployParams,
+        plan_digest: String,
+    ) -> ApplyPlanParams {
+        ApplyPlanParams {
+            recipe_id: params.recipe_id.clone(),
+            name: params.name.clone(),
+            namespace: params.namespace.clone(),
+            plan_digest,
+            runtime_args: params.runtime_args.clone(),
+            runtime_env: params.runtime_env.clone(),
+            env_overrides: params.env_overrides.clone(),
+            cpu: params.cpu.clone(),
+            memory: params.memory.clone(),
+            gpu_count: params.gpu_count,
+            readiness_timeout_seconds: params.readiness_timeout_seconds,
+        }
+    }
+
+    #[test]
+    fn plan_deploy_returns_overrides_in_plan() {
+        let params = full_override_params();
+        let output = tools().plan_deploy(Parameters(params)).expect("plan");
+        let plan_value: serde_json::Value = serde_json::from_str(&output).expect("parse plan");
+        let data = &plan_value["data"];
+        assert_eq!(data["name"], "custom-name");
+        assert_eq!(data["namespace"], "custom-ns");
+        let args: Vec<String> = serde_json::from_value(data["runtime_args"].clone()).expect("args");
+        assert!(args.contains(&"--max-model-len".into()));
+        assert!(args.contains(&"4096".into()));
+        let env: Vec<model_catalog::EnvVar> =
+            serde_json::from_value(data["runtime_env"].clone()).expect("runtime_env");
+        assert!(env.iter().any(|e| e.name == "FOO" && e.value == "bar"));
+        let env_overrides: Vec<model_catalog::EnvVar> =
+            serde_json::from_value(data["env_overrides"].clone()).expect("env_overrides");
+        assert!(
+            env_overrides
+                .iter()
+                .any(|e| e.name == "BAZ" && e.value == "qux")
+        );
+        let resources = &data["resource_requests"];
+        assert_eq!(resources["cpu"], "4");
+        assert_eq!(resources["memory"], "32Gi");
+        assert_eq!(resources["gpu_count"], 1);
+        assert_eq!(data["readiness_timeout_seconds"], 120);
+    }
+
+    #[tokio::test]
+    async fn ensure_weights_rejects_wrong_digest_with_overrides() {
+        let params = full_override_params();
+        let plan_output = tools()
+            .plan_deploy(Parameters(params.clone()))
+            .expect("plan");
+        let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
+        let correct_digest = plan_value["data"]["plan_digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
+
+        let result = tools()
+            .ensure_weights(Parameters(ensure_weights_from_plan_params(
+                &params,
+                "wrong-digest".into(),
+            )))
+            .await;
+        let err = result.expect_err("should reject wrong digest");
+        assert!(
+            err.contains("digest mismatch"),
+            "expected digest mismatch, got: {err}"
+        );
+        assert!(
+            err.contains(&correct_digest),
+            "expected error to contain correct override-derived digest {correct_digest}, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_plan_rejects_wrong_digest_with_overrides() {
+        let params = full_override_params();
+        let plan_output = tools()
+            .plan_deploy(Parameters(params.clone()))
+            .expect("plan");
+        let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
+        let correct_digest = plan_value["data"]["plan_digest"]
+            .as_str()
+            .expect("digest")
+            .to_string();
+
+        let result = tools()
+            .apply_plan(Parameters(apply_plan_from_plan_params(
+                &params,
+                "wrong-digest".into(),
+            )))
+            .await;
+        let err = result.expect_err("should reject wrong digest");
+        assert!(
+            err.contains("digest mismatch"),
+            "expected digest mismatch, got: {err}"
+        );
+        assert!(
+            err.contains(&correct_digest),
+            "expected error to contain correct override-derived digest {correct_digest}, got: {err}"
+        );
     }
 }
