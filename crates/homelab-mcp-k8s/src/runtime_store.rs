@@ -15,17 +15,31 @@ fn runtime_name(prefix: &str, id: &str) -> String {
 }
 
 /// Produce a Kubernetes label-safe value that is guaranteed to be ≤63 characters.
-/// Short safe values are preserved unchanged. Long values are truncated to a prefix
-/// followed by a deterministic 8-character hex hash suffix.
+///
+/// Sanitization rules:
+/// - Only ASCII alphanumeric, '-', '_', '.' are preserved.
+/// - All other characters are mapped to '-'.
+/// - Leading and trailing non-alphanumeric characters are trimmed.
+/// - Short safe values are preserved unchanged.
+/// - Long values are truncated to a prefix followed by a deterministic hash suffix.
+/// - If sanitization yields an empty string, a deterministic hash fallback is used.
 fn bounded_label_value(s: &str) -> String {
-    let sanitized = homelab_mcp_core::sanitize_label_value(s);
     const MAX_LEN: usize = 63;
 
-    if sanitized.len() <= MAX_LEN {
-        return sanitized;
-    }
+    // Step 1: Sanitize characters. Allowed: ASCII alphanumeric, '-', '_', '.'.
+    let sanitized: String = s
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
 
-    // Deterministic FNV-1a hash, formatted as 8 hex characters.
+    // Step 2: Deterministic FNV-1a hash of the full sanitized string.
     let hash = {
         const FNV_OFFSET: u64 = 0xcbf29ce484222325;
         const FNV_PRIME: u64 = 0x100000001b3;
@@ -37,9 +51,25 @@ fn bounded_label_value(s: &str) -> String {
         format!("{:08x}", h)
     };
 
-    // Reserve space for '-' separator + hash suffix.
+    // Step 3: Trim leading/trailing non-alphanumeric characters.
+    let trimmed = sanitized.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+
+    // Step 4: Empty after trimming → return deterministic hash fallback.
+    if trimmed.is_empty() {
+        return hash;
+    }
+
+    // Step 5: Short enough → return directly.
+    if trimmed.len() <= MAX_LEN {
+        return trimmed.to_string();
+    }
+
+    // Step 6: Long value → truncate prefix + append hash.
     let max_prefix_len = MAX_LEN - 1 - hash.len();
-    let mut prefix = sanitized[..max_prefix_len.min(sanitized.len())].to_string();
+
+    // Safe byte-slice because sanitized output is ASCII-only.
+    let prefix_bytes = &trimmed.as_bytes()[..max_prefix_len.min(trimmed.len())];
+    let mut prefix = String::from_utf8(prefix_bytes.to_vec()).unwrap();
 
     // Trim trailing non-alphanumeric characters.
     while let Some(last) = prefix.chars().last() {
@@ -79,9 +109,18 @@ fn decode_record<T: serde::de::DeserializeOwned>(cm: &ConfigMap) -> Result<T, ku
         )))
     })?;
     serde_yaml::from_str(raw).map_err(|error| {
+        let location = error.location();
+        let msg = match location {
+            Some(loc) => format!(
+                "ConfigMap {name} has invalid record.yaml at line {}, column {}",
+                loc.line(),
+                loc.column()
+            ),
+            None => format!("ConfigMap {name} has invalid record.yaml"),
+        };
         kube::Error::Service(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("ConfigMap {name} has invalid record.yaml: {error}"),
+            msg,
         )))
     })
 }
@@ -329,6 +368,98 @@ created_at: "2024-01-01T00:00:00Z"
             !msg.contains("abc123"),
             "error should NOT leak raw record.yaml content: {msg}"
         );
+    }
+
+    #[test]
+    fn decode_record_invalid_enum_does_not_leak_scalar() {
+        let yaml = r#"name: test
+namespace: default
+recipe_id: test
+target: spark
+runtime_args: []
+runtime_env: []
+resources:
+  cpu: "2"
+  memory: "16Gi"
+  gpu_count: 1
+status: secret-password
+last_plan_digest: abc123
+created_by: test
+created_at: "2024-01-01T00:00:00Z"
+"#;
+        let mut data = BTreeMap::new();
+        data.insert("record.yaml".into(), yaml.into());
+        let cm = ConfigMap {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                name: Some("leaky-cm".into()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+        let result: Result<RuntimeDeploymentRecord, kube::Error> = decode_record(&cm);
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("leaky-cm"),
+            "error should mention ConfigMap name: {msg}"
+        );
+        assert!(
+            msg.contains("record.yaml"),
+            "error should mention record.yaml: {msg}"
+        );
+        assert!(
+            !msg.contains("secret-password"),
+            "error should NOT leak raw scalar value: {msg}"
+        );
+    }
+
+    #[test]
+    fn bounded_label_value_spaces_replaced() {
+        let result = bounded_label_value("foo bar");
+        assert!(!result.contains(' '), "should not contain space: {result}");
+        assert_eq!(result, "foo-bar", "spaces should map to hyphens: {result}");
+    }
+
+    #[test]
+    fn bounded_label_value_trims_punctuation_ends() {
+        let result = bounded_label_value("-bad-");
+        let first = result.chars().next().unwrap();
+        let last = result.chars().last().unwrap();
+        assert!(
+            first.is_ascii_alphanumeric(),
+            "should start with alphanumeric: {result}"
+        );
+        assert!(
+            last.is_ascii_alphanumeric(),
+            "should end with alphanumeric: {result}"
+        );
+        assert!(
+            result.contains("bad"),
+            "should contain core value: {result}"
+        );
+    }
+
+    #[test]
+    fn bounded_label_value_non_ascii_fallback() {
+        let result = bounded_label_value("你好世界");
+        assert!(!result.is_empty(), "should not be empty: {result}");
+        assert!(result.len() <= 63, "should fit label limit: {result}");
+        assert!(
+            result
+                .chars()
+                .all(|c| { c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' }),
+            "should only contain ASCII label-safe chars: {result}"
+        );
+    }
+
+    #[test]
+    fn bounded_label_value_long_invalid_deterministic() {
+        let long = "foo bar baz ".repeat(20);
+        let r1 = bounded_label_value(&long);
+        let r2 = bounded_label_value(&long);
+        assert_eq!(r1, r2, "should be deterministic");
+        assert!(r1.len() <= 63, "should fit label limit: {r1}");
+        assert!(!r1.contains(' '), "should not contain space: {r1}");
     }
 
     #[test]
