@@ -1,8 +1,9 @@
 use homelab_mcp_core::compute_digest;
 use homelab_mcp_k8s::{
-    DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, create_download_job,
-    create_inferenceservice, delete_runtime_recipe, download_job_name, get_download_status,
-    get_inferenceservice_status, get_predictor_logs, list_runtime_recipes, upsert_runtime_recipe,
+    DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, collect_capacity_report,
+    create_download_job, create_inferenceservice, delete_runtime_recipe, download_job_name,
+    get_download_status, get_inferenceservice_status, get_predictor_logs, list_runtime_recipes,
+    upsert_runtime_recipe,
 };
 use model_catalog::{
     ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, RuntimeRecipeRecord, load_recipe_dir,
@@ -19,6 +20,7 @@ pub struct ModelCatalogTools {
     pub spark_arena_dir: PathBuf,
     pub runtime_state_namespace: String,
     pub cluster_profile: ClusterProfile,
+    pub prometheus_base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -118,6 +120,21 @@ pub struct CreateRecipeParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DeleteRecipeParams {
     pub recipe_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CapacityReportParams {
+    pub target: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct EstimateFitParams {
+    pub recipe_id: String,
+    pub target: String,
+    pub runtime_args: Option<Vec<String>>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub gpu_count: Option<u32>,
 }
 
 fn merge_recipe_sources(local: Vec<Recipe>, runtime: Vec<RuntimeRecipeRecord>) -> Vec<Recipe> {
@@ -515,6 +532,53 @@ impl ModelCatalogTools {
         ))
         .map_err(|error| error.to_string())
     }
+
+    #[tool(description = "Return capacity report for a model-serving target")]
+    pub async fn capacity_report(
+        &self,
+        Parameters(params): Parameters<CapacityReportParams>,
+    ) -> Result<String, String> {
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let report =
+            collect_capacity_report(client, &params.target, self.prometheus_base_url.as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+            format!("capacity report for {}", params.target),
+            report,
+        ))
+        .map_err(|error| error.to_string())
+    }
+
+    #[tool(description = "Estimate whether a recipe fits on a target using current capacity")]
+    pub async fn estimate_fit(
+        &self,
+        Parameters(params): Parameters<EstimateFitParams>,
+    ) -> Result<String, String> {
+        let _ = params.runtime_args;
+        let recipe = self.find_recipe(&params.recipe_id).await?;
+        let requested = resource_requests_from_params(params.cpu, params.memory, params.gpu_count)
+            .unwrap_or(model_catalog::ResourceRequests {
+                cpu: "2".into(),
+                memory: "16Gi".into(),
+                gpu_count: recipe.hardware.gpu_count,
+            });
+        let client = homelab_mcp_k8s::k8s_client()
+            .await
+            .map_err(|error| error.to_string())?;
+        let report =
+            collect_capacity_report(client, &params.target, self.prometheus_base_url.as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+        let estimate = model_catalog::estimate_fit_from_report(&report, requested);
+        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+            format!("fit estimate for {} on {}", params.recipe_id, params.target),
+            estimate,
+        ))
+        .map_err(|error| error.to_string())
+    }
 }
 
 impl ModelCatalogTools {
@@ -572,6 +636,7 @@ mod tests {
             // a live Kubernetes cluster. Production default remains "hermes".
             runtime_state_namespace: "".into(),
             cluster_profile: ClusterProfile::superbloom_default(),
+            prometheus_base_url: None,
         }
     }
 

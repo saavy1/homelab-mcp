@@ -1,8 +1,10 @@
+pub mod capacity;
 pub mod download;
 pub mod live;
 pub mod runtime_store;
 pub mod status;
 
+pub use capacity::collect_capacity_report;
 pub use download::{DownloadJobSpec, build_download_job, download_job_name};
 pub use live::{
     create_download_job, create_inferenceservice, get_download_status, get_events,

@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("/etc/model-catalog/spark-arena"));
     let runtime_state_namespace =
         env::var("MODEL_CATALOG_STATE_NAMESPACE").unwrap_or_else(|_| "hermes".into());
+    let prometheus_base_url = env::var("PROMETHEUS_BASE_URL").ok();
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
@@ -56,6 +57,7 @@ async fn main() -> Result<()> {
                 spark_arena_dir: spark_arena_dir.clone(),
                 runtime_state_namespace: runtime_state_namespace.clone(),
                 cluster_profile: ClusterProfile::superbloom_default(),
+                prometheus_base_url: prometheus_base_url.clone(),
             })
         },
         session_manager,

@@ -9,6 +9,7 @@ homelab-mcp-core = { path = "../homelab-mcp-core" }
 k8s-openapi.workspace = true
 kube.workspace = true
 model-catalog = { path = "../model-catalog" }
+reqwest.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
