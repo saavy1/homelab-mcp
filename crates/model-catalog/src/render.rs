@@ -100,13 +100,22 @@ fn render_runtime_args(
         "--host=0.0.0.0".to_string(),
         "--port=8080".to_string(),
     ];
-    for arg in &plan.runtime_args {
+    let runtime_args = &plan.runtime_args;
+    let mut i = 0;
+    while i < runtime_args.len() {
+        let arg = &runtime_args[i];
         if is_server_managed_arg(arg) {
+            // For split-form managed flags (e.g. --port 9001), skip the following value too.
+            if !arg.contains('=') && i + 1 < runtime_args.len() {
+                i += 1;
+            }
+            i += 1;
             continue;
         }
         if !args.contains(arg) {
             args.push(arg.clone());
         }
+        i += 1;
     }
     args
 }
@@ -260,5 +269,43 @@ mod tests {
                 && tol["value"] == "true"
                 && tol["effect"] == "NoExecute"
         }));
+    }
+
+    #[test]
+    fn split_form_managed_args_are_filtered_with_defaults() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                runtime_args: vec![
+                    "--port".into(),
+                    "9001".into(),
+                    "--host".into(),
+                    "127.0.0.1".into(),
+                ],
+                ..DeployOverrides::empty()
+            },
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array");
+
+        let arg_strs: Vec<&str> = args.iter().map(|v| v.as_str().unwrap()).collect();
+
+        // Split-form managed args and their values must not appear
+        assert!(!arg_strs.contains(&"--port"));
+        assert!(!arg_strs.contains(&"9001"));
+        assert!(!arg_strs.contains(&"--host"));
+        assert!(!arg_strs.contains(&"127.0.0.1"));
+
+        // Server-managed defaults must still be present
+        assert!(arg_strs.contains(&"--host=0.0.0.0"));
+        assert!(arg_strs.contains(&"--port=8080"));
     }
 }

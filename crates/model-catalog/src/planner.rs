@@ -118,12 +118,12 @@ pub fn validate_fit(
     plan: &DeploymentPlan,
 ) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
-    if recipe.hardware.gpu_count > profile.max_gpu_per_pod {
+    if plan.resource_requests.gpu_count > profile.max_gpu_per_pod {
         issues.push(ValidationIssue {
-            field: "hardware.gpu_count".into(),
+            field: "resource_requests.gpu_count".into(),
             message: format!(
-                "recipe requests {} GPU(s), cluster permits {} GPU(s) per pod",
-                recipe.hardware.gpu_count, profile.max_gpu_per_pod
+                "plan requests {} GPU(s), cluster permits {} GPU(s) per pod",
+                plan.resource_requests.gpu_count, profile.max_gpu_per_pod
             ),
             allowed: Some(format!("1..={}", profile.max_gpu_per_pod)),
         });
@@ -265,5 +265,32 @@ mod tests {
         );
         assert_eq!(result.data.resource_requests.memory, "32Gi");
         assert_eq!(result.data.readiness_timeout_seconds, 1200);
+    }
+
+    #[test]
+    fn gpu_override_exceeds_max_per_pod_returns_issue() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                resource_requests: Some(ResourceRequests {
+                    cpu: "2".into(),
+                    memory: "16Gi".into(),
+                    gpu_count: 2,
+                }),
+                ..DeployOverrides::empty()
+            },
+        );
+        assert_eq!(result.issues.len(), 1);
+        assert_eq!(result.issues[0].field, "resource_requests.gpu_count");
+        assert!(
+            result.issues[0]
+                .message
+                .contains("cluster permits 1 GPU(s) per pod")
+        );
     }
 }
