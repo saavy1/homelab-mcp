@@ -690,9 +690,11 @@ dependencies = [
  "homelab-mcp-core",
  "k8s-openapi",
  "kube",
+ "model-catalog",
  "schemars",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror",
 ]
 
