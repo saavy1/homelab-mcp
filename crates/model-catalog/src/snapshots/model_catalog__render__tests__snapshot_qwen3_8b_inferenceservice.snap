@@ -7,7 +7,7 @@ kind: InferenceService
 metadata:
   annotations:
     homelab.saavylab.dev/model-id: Qwen/Qwen3-8B
-    homelab.saavylab.dev/plan-digest: 93ba5761468f34229774e73bb4bcabb8ec39d55df35890a000ec4b66645cf915
+    homelab.saavylab.dev/plan-digest: f51294c76c539b91fc39d88be7b1bf2428345b6ba584e966599a75ebe39c2754
   labels:
     app.kubernetes.io/managed-by: homelab-mcp
     homelab.saavylab.dev/recipe-id: qwen3-8b
@@ -21,7 +21,8 @@ spec:
           - "--served-model-name=qwen3-8b"
           - "--host=0.0.0.0"
           - "--port=8080"
-          - "--trust-remote-code"
+          - "--enable-auto-tool-choice"
+          - "--tool-call-parser=hermes"
         command:
           - python3
           - "-m"
@@ -53,10 +54,12 @@ spec:
     tolerations:
       - effect: NoSchedule
         key: nvidia.com/gpu
-        operator: Exists
+        operator: Equal
+        value: "true"
       - effect: NoExecute
         key: nvidia.com/gpu
-        operator: Exists
+        operator: Equal
+        value: "true"
     volumes:
       - hostPath:
           path: /mnt/nas/models

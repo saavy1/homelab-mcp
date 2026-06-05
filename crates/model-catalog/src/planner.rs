@@ -9,7 +9,11 @@ pub struct DeployOverrides {
     pub name: Option<String>,
     pub namespace: Option<String>,
     pub replicas: Option<u32>,
+    pub runtime_args: Vec<String>,
+    pub runtime_env: Vec<EnvVar>,
     pub env_overrides: Vec<EnvVar>,
+    pub resource_requests: Option<ResourceRequests>,
+    pub readiness_timeout_seconds: Option<u32>,
 }
 
 impl DeployOverrides {
@@ -18,9 +22,32 @@ impl DeployOverrides {
             name: None,
             namespace: None,
             replicas: None,
+            runtime_args: Vec::new(),
+            runtime_env: Vec::new(),
             env_overrides: Vec::new(),
+            resource_requests: None,
+            readiness_timeout_seconds: None,
         }
     }
+}
+
+fn merge_args(default_args: &[String], override_args: &[String]) -> Vec<String> {
+    let mut merged = default_args.to_vec();
+    for arg in override_args {
+        if !merged.contains(arg) {
+            merged.push(arg.clone());
+        }
+    }
+    merged
+}
+
+fn merge_env(default_env: &[EnvVar], override_env: &[EnvVar]) -> Vec<EnvVar> {
+    let mut merged = default_env.to_vec();
+    for item in override_env {
+        merged.retain(|existing| existing.name != item.name);
+        merged.push(item.clone());
+    }
+    merged
 }
 
 pub fn plan_deploy(
@@ -28,11 +55,13 @@ pub fn plan_deploy(
     profile: &ClusterProfile,
     overrides: DeployOverrides,
 ) -> ToolResult<DeploymentPlan> {
-    let name = sanitize_dns_name(&overrides
-        .name
-        .clone()
-        .or_else(|| recipe.serving.service_name.clone())
-        .unwrap_or_else(|| recipe.id.clone()));
+    let name = sanitize_dns_name(
+        &overrides
+            .name
+            .clone()
+            .or_else(|| recipe.serving.service_name.clone())
+            .unwrap_or_else(|| recipe.id.clone()),
+    );
     let namespace = overrides
         .namespace
         .clone()
@@ -42,23 +71,26 @@ pub fn plan_deploy(
         name,
         namespace,
         recipe_id: recipe.id.clone(),
+        runtime_image: recipe.runtime.image.clone(),
+        runtime_args: merge_args(&recipe.runtime.args, &overrides.runtime_args),
+        runtime_env: merge_env(&recipe.runtime.env, &overrides.runtime_env),
         selected_gpu_class: recipe.hardware.gpu_class.clone(),
         replicas,
         scale_to_zero: replicas == 0,
         storage_mode: recipe.serving.storage_mode.clone(),
         ingress_policy: recipe.serving.ingress_policy.clone(),
         env_overrides: overrides.env_overrides,
-        resource_requests: ResourceRequests {
+        resource_requests: overrides.resource_requests.unwrap_or(ResourceRequests {
             cpu: "2".into(),
             memory: "16Gi".into(),
             gpu_count: recipe.hardware.gpu_count,
-        },
+        }),
+        readiness_timeout_seconds: overrides.readiness_timeout_seconds.unwrap_or(900),
         model_id: recipe.model.id.clone(),
         model_revision: recipe.model.revision.clone(),
         model_path: format!(
             "{}/{}",
-            profile.model_storage.gpu_node_path,
-            recipe.model.id
+            profile.model_storage.gpu_node_path, recipe.model.id
         ),
         plan_digest: String::new(),
     };
@@ -182,5 +214,56 @@ mod tests {
         }
         let result = plan_deploy(&recipe, &profile, DeployOverrides::empty());
         assert_eq!(result.issues[0].field, "hardware.gpu_class");
+    }
+
+    #[test]
+    fn plan_deploy_merges_runtime_args_and_env_overrides() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/deepseek-v4-flash.yaml"
+        ))
+        .expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides {
+                name: None,
+                namespace: None,
+                replicas: None,
+                runtime_args: vec![
+                    "--kv-cache-dtype".into(),
+                    "fp8".into(),
+                    "--tool-call-parser".into(),
+                    "hermes".into(),
+                ],
+                runtime_env: vec![EnvVar {
+                    name: "VLLM_TEST".into(),
+                    value: "enabled".into(),
+                }],
+                env_overrides: Vec::new(),
+                resource_requests: Some(ResourceRequests {
+                    cpu: "4".into(),
+                    memory: "32Gi".into(),
+                    gpu_count: 1,
+                }),
+                readiness_timeout_seconds: Some(1200),
+            },
+        );
+
+        assert!(
+            result
+                .data
+                .runtime_args
+                .contains(&"--kv-cache-dtype".into())
+        );
+        assert!(result.data.runtime_args.contains(&"fp8".into()));
+        assert!(
+            result
+                .data
+                .runtime_env
+                .iter()
+                .any(|item| item.name == "VLLM_TEST" && item.value == "enabled")
+        );
+        assert_eq!(result.data.resource_requests.memory, "32Gi");
+        assert_eq!(result.data.readiness_timeout_seconds, 1200);
     }
 }

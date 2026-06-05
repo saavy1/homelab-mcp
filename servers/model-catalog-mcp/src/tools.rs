@@ -34,6 +34,13 @@ pub struct PlanDeployParams {
     pub recipe_id: String,
     pub name: Option<String>,
     pub namespace: Option<String>,
+    pub runtime_args: Option<Vec<String>>,
+    pub runtime_env: Option<Vec<model_catalog::EnvVar>>,
+    pub env_overrides: Option<Vec<model_catalog::EnvVar>>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub gpu_count: Option<u32>,
+    pub readiness_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -42,6 +49,13 @@ pub struct EnsureWeightsParams {
     pub name: Option<String>,
     pub namespace: Option<String>,
     pub plan_digest: String,
+    pub runtime_args: Option<Vec<String>>,
+    pub runtime_env: Option<Vec<model_catalog::EnvVar>>,
+    pub env_overrides: Option<Vec<model_catalog::EnvVar>>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub gpu_count: Option<u32>,
+    pub readiness_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -55,6 +69,13 @@ pub struct ApplyPlanParams {
     pub name: Option<String>,
     pub namespace: Option<String>,
     pub plan_digest: String,
+    pub runtime_args: Option<Vec<String>>,
+    pub runtime_env: Option<Vec<model_catalog::EnvVar>>,
+    pub env_overrides: Option<Vec<model_catalog::EnvVar>>,
+    pub cpu: Option<String>,
+    pub memory: Option<String>,
+    pub gpu_count: Option<u32>,
+    pub readiness_timeout_seconds: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -79,6 +100,21 @@ fn verify_digest(plan: &DeploymentPlan, provided_digest: &str) -> Result<(), Str
         ));
     }
     Ok(())
+}
+
+fn resource_requests_from_params(
+    cpu: Option<String>,
+    memory: Option<String>,
+    gpu_count: Option<u32>,
+) -> Option<model_catalog::ResourceRequests> {
+    match (cpu, memory, gpu_count) {
+        (None, None, None) => None,
+        (cpu, memory, gpu_count) => Some(model_catalog::ResourceRequests {
+            cpu: cpu.unwrap_or_else(|| "2".into()),
+            memory: memory.unwrap_or_else(|| "16Gi".into()),
+            gpu_count: gpu_count.unwrap_or(1),
+        }),
+    }
 }
 
 #[tool_router(vis = "pub")]
@@ -123,7 +159,15 @@ impl ModelCatalogTools {
                 name: params.name,
                 namespace: params.namespace,
                 replicas: None,
-                env_overrides: Vec::new(),
+                runtime_args: params.runtime_args.unwrap_or_default(),
+                runtime_env: params.runtime_env.unwrap_or_default(),
+                env_overrides: params.env_overrides.unwrap_or_default(),
+                resource_requests: resource_requests_from_params(
+                    params.cpu,
+                    params.memory,
+                    params.gpu_count,
+                ),
+                readiness_timeout_seconds: params.readiness_timeout_seconds,
             },
         );
         info!(recipe_id = %params.recipe_id, risk = ?result.risk, "plan_deploy");
@@ -138,13 +182,26 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
-        let plan = self.derive_plan(&params.recipe_id, params.name, params.namespace)?;
+        let plan = self.derive_plan(
+            &params.recipe_id,
+            DeployOverrides {
+                name: params.name,
+                namespace: params.namespace,
+                replicas: None,
+                runtime_args: params.runtime_args.unwrap_or_default(),
+                runtime_env: params.runtime_env.unwrap_or_default(),
+                env_overrides: params.env_overrides.unwrap_or_default(),
+                resource_requests: resource_requests_from_params(
+                    params.cpu,
+                    params.memory,
+                    params.gpu_count,
+                ),
+                readiness_timeout_seconds: params.readiness_timeout_seconds,
+            },
+        )?;
         verify_digest(&plan, &params.plan_digest)?;
         let storage = &self.cluster_profile.model_storage;
-        let revision = plan
-            .model_revision
-            .clone()
-            .unwrap_or_else(|| "main".into());
+        let revision = plan.model_revision.clone().unwrap_or_else(|| "main".into());
         let job_name = download_job_name(&plan.model_id, &revision);
 
         // Check if already running/completed
@@ -221,17 +278,30 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<ApplyPlanParams>,
     ) -> Result<String, String> {
-        let plan = self.derive_plan(&params.recipe_id, params.name, params.namespace)?;
+        let plan = self.derive_plan(
+            &params.recipe_id,
+            DeployOverrides {
+                name: params.name,
+                namespace: params.namespace,
+                replicas: None,
+                runtime_args: params.runtime_args.unwrap_or_default(),
+                runtime_env: params.runtime_env.unwrap_or_default(),
+                env_overrides: params.env_overrides.unwrap_or_default(),
+                resource_requests: resource_requests_from_params(
+                    params.cpu,
+                    params.memory,
+                    params.gpu_count,
+                ),
+                readiness_timeout_seconds: params.readiness_timeout_seconds,
+            },
+        )?;
         verify_digest(&plan, &params.plan_digest)?;
 
         // Sentinel check: verify download completed
         let job_ref = DownloadJobRef {
             job_name: download_job_name(
                 &plan.model_id,
-                &plan
-                    .model_revision
-                    .clone()
-                    .unwrap_or_else(|| "main".into()),
+                &plan.model_revision.clone().unwrap_or_else(|| "main".into()),
             ),
             namespace: self
                 .cluster_profile
@@ -298,20 +368,10 @@ impl ModelCatalogTools {
     fn derive_plan(
         &self,
         recipe_id: &str,
-        name: Option<String>,
-        namespace: Option<String>,
+        overrides: DeployOverrides,
     ) -> Result<DeploymentPlan, String> {
         let recipe = self.find_recipe(recipe_id)?;
-        let result = plan_deploy(
-            &recipe,
-            &self.cluster_profile,
-            DeployOverrides {
-                name,
-                namespace,
-                replicas: None,
-                env_overrides: Vec::new(),
-            },
-        );
+        let result = plan_deploy(&recipe, &self.cluster_profile, overrides);
         if !result.issues.is_empty() {
             return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
         }
@@ -358,6 +418,13 @@ mod tests {
                 recipe_id: "qwen3-8b".into(),
                 name: None,
                 namespace: None,
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .expect("plan");
         assert!(output.contains("fits cluster superbloom"));
@@ -371,6 +438,13 @@ mod tests {
                 recipe_id: "qwen3-8b".into(),
                 name: None,
                 namespace: None,
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .expect("plan");
         let plan_value: serde_json::Value = serde_json::from_str(&plan_output).expect("parse plan");
@@ -384,12 +458,22 @@ mod tests {
                 name: None,
                 namespace: None,
                 plan_digest: digest,
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .await;
         // Without a cluster the kube API call fails, but it must NOT be a digest error
         match result {
             Ok(s) => assert!(s.contains("created_download_job") || s.contains("already")),
-            Err(e) => assert!(!e.contains("digest mismatch"), "unexpected digest error: {e}"),
+            Err(e) => assert!(
+                !e.contains("digest mismatch"),
+                "unexpected digest error: {e}"
+            ),
         }
     }
 
@@ -400,6 +484,13 @@ mod tests {
                 recipe_id: "qwen3-8b".into(),
                 name: None,
                 namespace: None,
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .expect("plan");
         assert!(plan_output.contains("plan_digest"));
@@ -409,10 +500,20 @@ mod tests {
                 name: None,
                 namespace: None,
                 plan_digest: "wrong-digest".into(),
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .await;
         let err = result.expect_err("should reject wrong digest");
-        assert!(err.contains("digest mismatch"), "expected digest mismatch, got: {err}");
+        assert!(
+            err.contains("digest mismatch"),
+            "expected digest mismatch, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -422,6 +523,13 @@ mod tests {
                 recipe_id: "qwen3-8b".into(),
                 name: None,
                 namespace: None,
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .expect("plan");
         assert!(plan_output.contains("plan_digest"));
@@ -431,6 +539,13 @@ mod tests {
                 name: None,
                 namespace: None,
                 plan_digest: "wrong-digest".into(),
+                runtime_args: None,
+                runtime_env: None,
+                env_overrides: None,
+                cpu: None,
+                memory: None,
+                gpu_count: None,
+                readiness_timeout_seconds: None,
             }))
             .await;
         assert!(result.is_err());
