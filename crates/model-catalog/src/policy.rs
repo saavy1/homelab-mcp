@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use homelab_mcp_core::ValidationIssue;
 
 use crate::{ClusterProfile, DeploymentPlan, Recipe};
@@ -42,12 +44,8 @@ pub fn validate_plan_policy(
     }
 
     let allowed_root = &profile.model_storage.gpu_node_path;
-    if !plan.model_path.starts_with(allowed_root) {
-        issues.push(ValidationIssue {
-            field: "model_path".into(),
-            message: format!("model path {} is outside approved root", plan.model_path),
-            allowed: Some(allowed_root.clone()),
-        });
+    if let Some(issue) = validate_model_path(&plan.model_path, allowed_root) {
+        issues.push(issue);
     }
 
     issues
@@ -78,6 +76,51 @@ fn has_kv_cache_dtype_fp8(plan: &DeploymentPlan) -> bool {
 fn has_arg_value(args: &[String], flag: &str, value: &str) -> bool {
     args.windows(2)
         .any(|window| window[0] == flag && window[1] == value)
+}
+
+fn validate_model_path(model_path: &str, allowed_root: &str) -> Option<ValidationIssue> {
+    let model_path = Path::new(model_path);
+    let allowed_root = Path::new(allowed_root);
+
+    if !model_path.is_absolute() {
+        return Some(ValidationIssue {
+            field: "model_path".into(),
+            message: format!("model path {} must be absolute", model_path.display()),
+            allowed: Some("absolute path".into()),
+        });
+    }
+
+    let normalized_model = normalize_path(model_path);
+    let normalized_allowed = normalize_path(allowed_root);
+
+    if !normalized_model.starts_with(&normalized_allowed) {
+        return Some(ValidationIssue {
+            field: "model_path".into(),
+            message: format!(
+                "model path {} is outside approved root",
+                model_path.display()
+            ),
+            allowed: Some(allowed_root.to_string_lossy().into()),
+        });
+    }
+
+    None
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(p) => result.push(p.as_os_str()),
+            std::path::Component::RootDir => result.push("/"),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                let _ = result.pop();
+            }
+            std::path::Component::Normal(c) => result.push(c),
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -243,5 +286,70 @@ mod tests {
         assert!(issues.iter().any(|issue| {
             issue.field == "model_path" && issue.message.contains("outside approved root")
         }));
+    }
+
+    #[test]
+    fn rejects_model_path_with_parent_dir_traversal() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let mut plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        plan.model_path = "/mnt/nas/models/../secrets/foo".into();
+
+        let issues = validate_plan_policy(&recipe, &ClusterProfile::superbloom_default(), &plan);
+
+        assert!(issues.iter().any(|issue| {
+            issue.field == "model_path" && issue.message.contains("outside approved root")
+        }));
+    }
+
+    #[test]
+    fn rejects_model_path_with_prefix_confusion() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let mut plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        plan.model_path = "/mnt/nas/models-evil/foo".into();
+
+        let issues = validate_plan_policy(&recipe, &ClusterProfile::superbloom_default(), &plan);
+
+        assert!(issues.iter().any(|issue| {
+            issue.field == "model_path" && issue.message.contains("outside approved root")
+        }));
+    }
+
+    #[test]
+    fn accepts_model_path_inside_approved_root() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let mut plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        plan.model_path = "/mnt/nas/models/Qwen/Qwen3-8B".into();
+
+        let issues = validate_plan_policy(&recipe, &ClusterProfile::superbloom_default(), &plan);
+
+        assert!(
+            issues.iter().all(|issue| issue.field != "model_path"),
+            "expected no model_path issues, got: {:?}",
+            issues
+        );
     }
 }
