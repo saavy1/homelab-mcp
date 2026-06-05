@@ -184,6 +184,15 @@ pub async fn get_runtime_recipe(
         .find(|record| record.recipe.id == recipe_id))
 }
 
+pub async fn get_runtime_deployment(
+    client: Client,
+    namespace: &str,
+    name: &str,
+) -> Result<Option<RuntimeDeploymentRecord>, kube::Error> {
+    let records = list_runtime_deployments(client, namespace).await?;
+    Ok(records.into_iter().find(|record| record.name == name))
+}
+
 pub async fn delete_runtime_recipe(
     client: Client,
     namespace: &str,

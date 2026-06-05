@@ -12,8 +12,8 @@ pub use live::{
     get_predictor_logs, k8s_client,
 };
 pub use runtime_store::{
-    delete_runtime_recipe, get_runtime_recipe, list_runtime_deployments, list_runtime_recipes,
-    upsert_runtime_deployment, upsert_runtime_recipe,
+    delete_runtime_recipe, get_runtime_deployment, get_runtime_recipe, list_runtime_deployments,
+    list_runtime_recipes, upsert_runtime_deployment, upsert_runtime_recipe,
 };
 pub use status::{
     DownloadJobRef, DownloadStatus, KserveCondition, ModelLogs, ModelStatus, SentinelInfo,
