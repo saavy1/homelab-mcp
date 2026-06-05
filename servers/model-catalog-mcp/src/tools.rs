@@ -557,14 +557,31 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<EstimateFitParams>,
     ) -> Result<String, String> {
-        let _ = params.runtime_args;
         let recipe = self.find_recipe(&params.recipe_id).await?;
-        let requested = resource_requests_from_params(params.cpu, params.memory, params.gpu_count)
-            .unwrap_or(model_catalog::ResourceRequests {
-                cpu: "2".into(),
-                memory: "16Gi".into(),
-                gpu_count: recipe.hardware.gpu_count,
-            });
+        let plan_result = plan_deploy(
+            &recipe,
+            &self.cluster_profile,
+            DeployOverrides {
+                name: None,
+                namespace: None,
+                replicas: None,
+                runtime_args: params.runtime_args.unwrap_or_default(),
+                runtime_env: Vec::new(),
+                env_overrides: Vec::new(),
+                resource_requests: resource_requests_from_params(
+                    params.cpu,
+                    params.memory,
+                    params.gpu_count,
+                ),
+                readiness_timeout_seconds: None,
+            },
+        );
+        if !plan_result.issues.is_empty() {
+            return Err(
+                serde_json::to_string(&plan_result.issues).map_err(|error| error.to_string())?
+            );
+        }
+        let requested = plan_result.data.resource_requests;
         let client = homelab_mcp_k8s::k8s_client()
             .await
             .map_err(|error| error.to_string())?;

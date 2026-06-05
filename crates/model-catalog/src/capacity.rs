@@ -41,31 +41,70 @@ pub struct FitEstimate {
     pub recommended_resources: ResourceRequests,
 }
 
+fn parse_memory_bytes(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if let Ok(n) = s.parse::<f64>() {
+        return Some(n);
+    }
+    if let Some(num_str) = s.strip_suffix("Gi") {
+        return num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| n * 1024.0 * 1024.0 * 1024.0);
+    }
+    if let Some(num_str) = s.strip_suffix("Mi") {
+        return num_str
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| n * 1024.0 * 1024.0);
+    }
+    None
+}
+
 pub fn estimate_fit_from_report(
     report: &CapacityReport,
     requested: ResourceRequests,
 ) -> FitEstimate {
     let mut risks = report.risks.clone();
-    if !report.node_ready {
-        risks.push("target node is not Ready".into());
-    }
-
-    // Simple GPU request sum. With integer gpu_count this is conservative:
-    // two models each requesting 1 GPU on a 1-GPU node will not fit.
-    // Shared 1-GPU colocation would require fractional gpu_count, which
-    // is not yet supported in ResourceRequests.
     let active_gpu: u32 = report
         .active_models
         .iter()
         .map(|model| model.requested.gpu_count)
         .sum();
-    let fits = report.node_ready && active_gpu + requested.gpu_count <= 1;
 
+    let fits;
     let confidence = if report.observed_gpu_memory_total_bytes.is_some() {
         FitConfidence::Medium
     } else {
         FitConfidence::Low
     };
+
+    if !report.node_ready {
+        fits = false;
+        risks.push("target node is not Ready".into());
+    } else if let (Some(total), Some(used)) = (
+        report.observed_gpu_memory_total_bytes,
+        report.observed_gpu_memory_used_bytes,
+    ) {
+        let free = total - used;
+        match parse_memory_bytes(&requested.memory) {
+            Some(req_mem) => {
+                fits = requested.gpu_count <= 1 && free >= req_mem;
+            }
+            None => {
+                fits = false;
+                risks.push(format!(
+                    "requested memory '{}' cannot be parsed for fit check",
+                    requested.memory
+                ));
+            }
+        }
+    } else {
+        fits = active_gpu + requested.gpu_count <= 1;
+        risks.push("fit uses Kubernetes requests only".into());
+    }
 
     FitEstimate {
         target: report.target.clone(),
@@ -284,5 +323,93 @@ mod tests {
         );
         // Simple sum: 1 (active) + 1 (requested) > 1 (capacity)
         assert!(!fit.fits);
+    }
+
+    #[test]
+    fn second_small_model_fits_when_free_gpu_memory_is_enough() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: vec![ActiveModelCapacity {
+                name: "existing-model".into(),
+                namespace: "default".into(),
+                recipe_id: Some("qwen3-8b".into()),
+                requested: ResourceRequests {
+                    cpu: "2".into(),
+                    memory: "16Gi".into(),
+                    gpu_count: 1,
+                },
+                ready: true,
+            }],
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(8_000_000_000.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "8Gi".into(),
+                gpu_count: 1,
+            },
+        );
+        assert!(fit.fits);
+        assert_eq!(fit.mode, "co-locate-small-model");
+    }
+
+    #[test]
+    fn memory_pressure_makes_fit_false() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: vec![ActiveModelCapacity {
+                name: "existing-model".into(),
+                namespace: "default".into(),
+                recipe_id: Some("qwen3-8b".into()),
+                requested: ResourceRequests {
+                    cpu: "2".into(),
+                    memory: "16Gi".into(),
+                    gpu_count: 1,
+                },
+                ready: true,
+            }],
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(20_000_000_000.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "8Gi".into(),
+                gpu_count: 1,
+            },
+        );
+        assert!(!fit.fits);
+    }
+
+    #[test]
+    fn unparseable_memory_adds_risk() {
+        let report = CapacityReport {
+            target: "spark".into(),
+            node_ready: true,
+            active_models: Vec::new(),
+            observed_gpu_utilization_percent: None,
+            observed_gpu_memory_used_bytes: Some(0.0),
+            observed_gpu_memory_total_bytes: Some(24_000_000_000.0),
+            risks: Vec::new(),
+        };
+        let fit = estimate_fit_from_report(
+            &report,
+            ResourceRequests {
+                cpu: "2".into(),
+                memory: "invalid".into(),
+                gpu_count: 1,
+            },
+        );
+        assert!(!fit.fits);
+        assert!(fit.risks.iter().any(|r| r.contains("cannot be parsed")));
     }
 }
