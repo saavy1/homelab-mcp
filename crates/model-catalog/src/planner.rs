@@ -1,7 +1,8 @@
 use crate::digest::compute_plan_digest;
 use crate::policy::validate_plan_policy;
 use crate::{
-    ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, StorageMode,
+    ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, RuntimeEngine,
+    StorageMode,
 };
 use homelab_mcp_core::{ToolResult, ValidationIssue, sanitize_dns_name};
 
@@ -143,6 +144,11 @@ pub fn plan_deploy(
         .clone()
         .unwrap_or_else(|| recipe.serving.namespace.clone());
     let replicas = overrides.replicas.unwrap_or(recipe.serving.replicas);
+    let runtime_engine = recipe.runtime.engine.clone();
+    let runtime_port = recipe.runtime.port.unwrap_or(match runtime_engine {
+        RuntimeEngine::Vllm => 8080,
+        RuntimeEngine::Sglang => 8000,
+    });
     let mut plan = DeploymentPlan {
         name,
         namespace,
@@ -168,6 +174,8 @@ pub fn plan_deploy(
             "{}/{}",
             profile.model_storage.gpu_node_path, recipe.model.id
         ),
+        runtime_engine,
+        runtime_port,
         plan_digest: String::new(),
     };
     plan.plan_digest = compute_plan_digest(&plan);
@@ -403,6 +411,153 @@ mod tests {
         assert!(
             !args.contains(&"32768".to_string()),
             "orphan default value 32768 must not remain"
+        );
+    }
+
+    #[test]
+    fn recipe_without_engine_defaults_to_vllm_port_8080() {
+        let recipe = parse_recipe_yaml(include_str!(
+            "../tests/fixtures/local-recipes/qwen3-8b.yaml"
+        ))
+        .expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        );
+        assert_eq!(result.data.runtime_engine, RuntimeEngine::Vllm);
+        assert_eq!(result.data.runtime_port, 8080);
+    }
+
+    #[test]
+    fn sglang_recipe_defaults_port_8000() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args: []
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        );
+        assert_eq!(result.data.runtime_engine, RuntimeEngine::Sglang);
+        assert_eq!(result.data.runtime_port, 8000);
+    }
+
+    #[test]
+    fn explicit_runtime_port_overrides_default() {
+        let yaml = r#"
+id: explicit-port
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  port: 9000
+  args: []
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let result = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        );
+        assert_eq!(result.data.runtime_engine, RuntimeEngine::Sglang);
+        assert_eq!(result.data.runtime_port, 9000);
+    }
+
+    #[test]
+    fn digest_changes_when_engine_or_port_changes() {
+        let yaml_vllm = r#"
+id: digest-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: vllm/vllm-openai:latest
+  args: []
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe_vllm = parse_recipe_yaml(yaml_vllm).expect("recipe parses");
+        let plan_vllm = plan_deploy(
+            &recipe_vllm,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+
+        let yaml_sglang = r#"
+id: digest-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: vllm/vllm-openai:latest
+  engine: sglang
+  args: []
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe_sglang = parse_recipe_yaml(yaml_sglang).expect("recipe parses");
+        let plan_sglang = plan_deploy(
+            &recipe_sglang,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+
+        assert_ne!(
+            plan_vllm.plan_digest, plan_sglang.plan_digest,
+            "digest must differ when engine changes"
         );
     }
 }

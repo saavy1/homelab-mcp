@@ -44,6 +44,7 @@ pub fn search_recipes<'a>(recipes: &'a [Recipe], query: Option<&str>) -> Vec<&'a
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeEngine;
 
     #[test]
     fn parses_local_recipe_fixture() {
@@ -53,6 +54,14 @@ mod tests {
         assert_eq!(recipe.model.id, "Qwen/Qwen3-8B");
         assert_eq!(recipe.hardware.gpu_count, 1);
         assert_eq!(recipe.model.gated, Some(false));
+    }
+
+    #[test]
+    fn fixture_without_engine_defaults_to_vllm() {
+        let input = include_str!("../tests/fixtures/local-recipes/qwen3-8b.yaml");
+        let recipe = parse_recipe_yaml(input).expect("recipe parses");
+        assert_eq!(recipe.runtime.engine, RuntimeEngine::Vllm);
+        assert_eq!(recipe.runtime.port, None);
     }
 
     #[test]

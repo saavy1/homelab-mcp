@@ -10,6 +10,14 @@ pub enum RecipeSource {
     AdHoc,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RuntimeEngine {
+    #[default]
+    Vllm,
+    Sglang,
+}
+
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct Recipe {
     pub id: String,
@@ -30,7 +38,7 @@ pub struct ModelSpec {
     pub license: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Serialize)]
 pub struct RuntimeSpec {
     pub image: String,
     pub args: Vec<String>,
@@ -40,6 +48,9 @@ pub struct RuntimeSpec {
     pub dtype: Option<String>,
     pub tool_call_parser: Option<String>,
     pub reasoning_parser: Option<String>,
+    #[serde(default)]
+    pub engine: RuntimeEngine,
+    pub port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -105,6 +116,8 @@ pub struct DeploymentPlan {
     pub model_id: String,
     pub model_revision: Option<String>,
     pub model_path: String,
+    pub runtime_engine: RuntimeEngine,
+    pub runtime_port: u16,
     pub plan_digest: String,
 }
 

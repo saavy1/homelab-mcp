@@ -1,19 +1,30 @@
-use crate::DeploymentPlan;
+use crate::{DeploymentPlan, RuntimeEngine};
 use homelab_mcp_core::{HomelabMcpError, HomelabResult, sanitize_label_value};
 use serde_json::{Value, json};
 
 pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
-    // The GPU node mounts the NAS at /mnt/nas/models; model files live at
-    // /mnt/nas/models/<org>/<model>. We pass the full path to --model.
-    let model_arg = format!("--model={}", plan.model_path);
-    let served_model_arg = format!("--served-model-name={}", plan.name);
     // Derive the NAS mount point: parent of org/model in the model_path.
     // e.g. /mnt/nas/models/LiquidAI/LFM2.5-350M -> /mnt/nas/models
     let mount_path = {
         let parts: Vec<&str> = plan.model_path.split('/').collect();
         parts[..parts.len() - 2].join("/")
     };
-    let args = render_runtime_args(plan, model_arg, served_model_arg);
+    let (command, args) = match plan.runtime_engine {
+        RuntimeEngine::Vllm => {
+            let model_arg = format!("--model={}", plan.model_path);
+            let served_model_arg = format!("--served-model-name={}", plan.name);
+            let args = render_vllm_runtime_args(plan, model_arg, served_model_arg);
+            (
+                json!(["python3", "-m", "vllm.entrypoints.openai.api_server"]),
+                args,
+            )
+        }
+        RuntimeEngine::Sglang => {
+            let model_arg = format!("--model-path={}", plan.model_path);
+            let args = render_sglang_runtime_args(plan, model_arg);
+            (json!(["sglang", "serve"]), args)
+        }
+    };
     let env = render_runtime_env(plan);
 
     json!({
@@ -39,9 +50,14 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
                 "containers": [{
                     "name": "kserve-container",
                     "image": plan.runtime_image,
-                    "command": ["python3", "-m", "vllm.entrypoints.openai.api_server"],
+                    "command": command,
                     "args": args,
                     "env": env,
+                    "ports": [{
+                        "containerPort": plan.runtime_port,
+                        "name": "http",
+                        "protocol": "TCP"
+                    }],
                     "resources": {
                         "requests": {
                             "cpu": plan.resource_requests.cpu,
@@ -89,7 +105,7 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
     })
 }
 
-fn render_runtime_args(
+fn render_vllm_runtime_args(
     plan: &DeploymentPlan,
     model_arg: String,
     served_model_arg: String,
@@ -98,13 +114,13 @@ fn render_runtime_args(
         model_arg,
         served_model_arg,
         "--host=0.0.0.0".to_string(),
-        "--port=8080".to_string(),
+        format!("--port={}", plan.runtime_port),
     ];
     let runtime_args = &plan.runtime_args;
     let mut i = 0;
     while i < runtime_args.len() {
         let arg = &runtime_args[i];
-        if is_server_managed_arg(arg) {
+        if is_vllm_server_managed_arg(arg) {
             // For split-form managed flags (e.g. --port 9001), skip the following value too,
             // but only if it's actually a value and not another flag.
             if !arg.contains('=')
@@ -122,12 +138,45 @@ fn render_runtime_args(
     args
 }
 
-fn is_server_managed_arg(arg: &str) -> bool {
+fn is_vllm_server_managed_arg(arg: &str) -> bool {
     matches!(arg, "--host" | "--port" | "--model" | "--served-model-name")
         || arg.starts_with("--host=")
         || arg.starts_with("--port=")
         || arg.starts_with("--model=")
         || arg.starts_with("--served-model-name=")
+}
+
+fn render_sglang_runtime_args(plan: &DeploymentPlan, model_arg: String) -> Vec<String> {
+    let mut args = vec![
+        model_arg,
+        "--host=0.0.0.0".to_string(),
+        format!("--port={}", plan.runtime_port),
+    ];
+    let runtime_args = &plan.runtime_args;
+    let mut i = 0;
+    while i < runtime_args.len() {
+        let arg = &runtime_args[i];
+        if is_sglang_server_managed_arg(arg) {
+            if !arg.contains('=')
+                && i + 1 < runtime_args.len()
+                && !runtime_args[i + 1].starts_with("--")
+            {
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        args.push(arg.clone());
+        i += 1;
+    }
+    args
+}
+
+fn is_sglang_server_managed_arg(arg: &str) -> bool {
+    matches!(arg, "--host" | "--port" | "--model-path")
+        || arg.starts_with("--host=")
+        || arg.starts_with("--port=")
+        || arg.starts_with("--model-path=")
 }
 
 fn render_runtime_env(plan: &DeploymentPlan) -> Vec<Value> {
@@ -382,5 +431,168 @@ mod tests {
             2,
             "value 'same' must appear twice, not deduplicated"
         );
+    }
+
+    #[test]
+    fn sglang_renders_serve_command_and_model_path() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args:
+    - --flashinfer
+    - --kv-cache-dtype=fp8
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let container = &value["spec"]["predictor"]["containers"][0];
+
+        let command: Vec<&str> = container["command"]
+            .as_array()
+            .expect("command array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(command, vec!["sglang", "serve"]);
+
+        let args: Vec<&str> = container["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(
+            args.iter().any(|a| a.starts_with("--model-path=")),
+            "args must contain --model-path"
+        );
+        assert!(
+            !args.iter().any(|a| a.starts_with("--model=")),
+            "args must not contain --model="
+        );
+        assert!(
+            !args.iter().any(|a| a.starts_with("--served-model-name=")),
+            "args must not contain --served-model-name="
+        );
+        assert!(args.contains(&"--flashinfer"));
+        assert!(args.contains(&"--kv-cache-dtype=fp8"));
+        assert!(args.contains(&"--host=0.0.0.0"));
+        assert!(args.contains(&"--port=8000"));
+
+        let ports = container["ports"].as_array().expect("ports array");
+        assert_eq!(ports[0]["containerPort"], 8000);
+    }
+
+    #[test]
+    fn sglang_managed_port_override_is_filtered() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args:
+    - --port
+    - 9999
+    - --flashinfer
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args: Vec<&str> = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(!args.contains(&"--port"));
+        assert!(!args.contains(&"9999"));
+        assert!(args.contains(&"--port=8000"));
+        assert!(args.contains(&"--flashinfer"));
+    }
+
+    #[test]
+    fn explicit_port_is_honored_in_vllm_rendering() {
+        let yaml = r#"
+id: explicit-port
+source: local
+model:
+  id: test/model
+runtime:
+  image: vllm/vllm-openai:latest
+  port: 9090
+  args: []
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let container = &value["spec"]["predictor"]["containers"][0];
+
+        let args: Vec<&str> = container["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(args.contains(&"--port=9090"));
+
+        let ports = container["ports"].as_array().expect("ports array");
+        assert_eq!(ports[0]["containerPort"], 9090);
     }
 }

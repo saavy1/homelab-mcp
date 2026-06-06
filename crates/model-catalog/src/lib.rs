@@ -27,7 +27,7 @@ pub use state::{
 };
 pub use types::{
     ApplyMode, DeploymentPlan, EnvVar, HardwareSpec, IngressPolicy, ModelSpec, Recipe,
-    RecipeSource, ResourceRequests, RuntimeSpec, ServingSpec, StorageMode,
+    RecipeSource, ResourceRequests, RuntimeEngine, RuntimeSpec, ServingSpec, StorageMode,
 };
 
 #[cfg(test)]

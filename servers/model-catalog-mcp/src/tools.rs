@@ -1245,6 +1245,8 @@ mod tests {
                 dtype: None,
                 tool_call_parser: None,
                 reasoning_parser: None,
+                engine: model_catalog::RuntimeEngine::Vllm,
+                port: None,
             },
             hardware: model_catalog::HardwareSpec {
                 gpu_class: "a100".into(),

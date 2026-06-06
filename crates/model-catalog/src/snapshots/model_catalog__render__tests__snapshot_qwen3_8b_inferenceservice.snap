@@ -7,7 +7,7 @@ kind: InferenceService
 metadata:
   annotations:
     homelab.saavylab.dev/model-id: Qwen/Qwen3-8B
-    homelab.saavylab.dev/plan-digest: f51294c76c539b91fc39d88be7b1bf2428345b6ba584e966599a75ebe39c2754
+    homelab.saavylab.dev/plan-digest: 2f1ab678ff4eaed4e3a317b10ab1427243cb85a76d75f6549f3ad88b3d31836b
   labels:
     app.kubernetes.io/managed-by: homelab-mcp
     homelab.saavylab.dev/recipe-id: qwen3-8b
@@ -34,6 +34,10 @@ spec:
             value: "1"
         image: "vllm/vllm-openai:latest"
         name: kserve-container
+        ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
         resources:
           limits:
             cpu: "2"

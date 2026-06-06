@@ -7,7 +7,7 @@ kind: InferenceService
 metadata:
   annotations:
     homelab.saavylab.dev/model-id: deepseek-ai/DeepSeek-V4-Flash
-    homelab.saavylab.dev/plan-digest: 7c2c7d551d0a8c15ee4cba904403f8cda55d3c6e87edc43e883950eb57829004
+    homelab.saavylab.dev/plan-digest: a50bf343014ab53d5066f601d0da4cc3e7e341ee8249005adc529e7307fdccba
   labels:
     app.kubernetes.io/managed-by: homelab-mcp
     homelab.saavylab.dev/recipe-id: deepseek-v4-flash
@@ -33,6 +33,10 @@ spec:
             value: "1"
         image: "vllm/vllm-openai:latest"
         name: kserve-container
+        ports:
+          - containerPort: 8080
+            name: http
+            protocol: TCP
         resources:
           limits:
             cpu: "2"

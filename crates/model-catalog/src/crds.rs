@@ -173,6 +173,8 @@ mod tests {
                 dtype: Some("auto".into()),
                 tool_call_parser: Some("hermes".into()),
                 reasoning_parser: None,
+                engine: crate::RuntimeEngine::Vllm,
+                port: None,
             },
             hardware: HardwareSpec {
                 gpu_class: "gb10".into(),
