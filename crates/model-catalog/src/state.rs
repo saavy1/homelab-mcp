@@ -76,6 +76,8 @@ pub struct RuntimeDeploymentRecord {
     pub created_by: String,
     pub created_at: String,
     pub failure_reason: Option<String>,
+    pub runtime_engine: crate::types::RuntimeEngine,
+    pub runtime_port: u16,
 }
 
 #[cfg(test)]

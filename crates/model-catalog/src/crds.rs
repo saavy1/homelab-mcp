@@ -1,5 +1,5 @@
 use crate::state::{DeploymentState, RuntimeDeploymentRecord, RuntimeRecipeRecord};
-use crate::types::{EnvVar, Recipe, ResourceRequests};
+use crate::types::{EnvVar, Recipe, ResourceRequests, RuntimeEngine};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,8 @@ pub struct ModelDeploymentSpec {
     pub last_plan_digest: String,
     pub created_by: String,
     pub created_at: String,
+    pub runtime_engine: RuntimeEngine,
+    pub runtime_port: u16,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
@@ -109,6 +111,8 @@ pub fn deployment_record_to_spec(record: &RuntimeDeploymentRecord) -> ModelDeplo
         last_plan_digest: record.last_plan_digest.clone(),
         created_by: record.created_by.clone(),
         created_at: record.created_at.clone(),
+        runtime_engine: record.runtime_engine.clone(),
+        runtime_port: record.runtime_port,
     }
 }
 
@@ -141,6 +145,8 @@ pub fn deployment_parts_to_record(
         created_by: spec.created_by.clone(),
         created_at: spec.created_at.clone(),
         failure_reason: status.failure_reason,
+        runtime_engine: spec.runtime_engine.clone(),
+        runtime_port: spec.runtime_port,
     }
 }
 
@@ -228,6 +234,8 @@ mod tests {
             created_by: "hermes".into(),
             created_at: "2026-06-05T00:00:00Z".into(),
             failure_reason: None,
+            runtime_engine: crate::RuntimeEngine::Vllm,
+            runtime_port: 8080,
         };
         let spec = deployment_record_to_spec(&record);
         let status = deployment_record_to_status(&record);

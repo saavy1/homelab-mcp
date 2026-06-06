@@ -503,6 +503,8 @@ impl ModelCatalogTools {
             created_by: "hermes".into(),
             created_at: now,
             failure_reason: None,
+            runtime_engine: plan.runtime_engine.clone(),
+            runtime_port: plan.runtime_port,
         };
         let client = homelab_mcp_k8s::k8s_client()
             .await
