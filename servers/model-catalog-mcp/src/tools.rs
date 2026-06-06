@@ -359,7 +359,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(
-        description = "Apply a KServe InferenceService to the cluster. Default create_only. Cluster write. Refuses if sentinel absent."
+        description = "Apply a KServe InferenceService to the cluster. Upserts via server-side apply. Cluster write. Refuses if sentinel absent."
     )]
     #[instrument(skip(self, params), fields(recipe_id = %params.recipe_id))]
     pub async fn apply_plan(

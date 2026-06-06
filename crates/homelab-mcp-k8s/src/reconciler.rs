@@ -1,8 +1,9 @@
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition;
-use kube::{Api, Client, api::ListParams, core::dynamic::DynamicObject, discovery::ApiResource};
+use kube::{
+    Api, Client, api::ListParams, api::PostParams, core::dynamic::DynamicObject,
+    discovery::ApiResource,
+};
 use model_catalog::{DeploymentState, ModelDeployment, ModelDeploymentStatus};
-
-use crate::update_runtime_deployment_status;
 
 /// Determine whether a KServe `Ready=False` condition represents a terminal failure.
 ///
@@ -285,19 +286,30 @@ pub async fn reconcile_model_deployments_once(
             continue;
         }
 
-        if let Err(e) = update_runtime_deployment_status(
-            client.clone(),
-            state_namespace,
-            &deployment.spec.name,
-            &new_status,
-        )
-        .await
+        let mut to_update = current;
+        to_update.status = Some(new_status);
+        match api
+            .replace_status(
+                &deployment.metadata.name.clone().unwrap_or_default(),
+                &PostParams::default(),
+                &to_update,
+            )
+            .await
         {
-            tracing::warn!(
-                deployment = %deployment.spec.name,
-                error = %e,
-                "failed to update deployment status"
-            );
+            Ok(_) => {}
+            Err(kube::Error::Api(err)) if err.code == 409 => {
+                tracing::info!(
+                    deployment = %deployment.spec.name,
+                    "skipping status update due to conflict (deployment modified concurrently)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    deployment = %deployment.spec.name,
+                    error = %e,
+                    "failed to replace deployment status"
+                );
+            }
         }
     }
 
