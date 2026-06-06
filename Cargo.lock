@@ -1339,6 +1339,7 @@ dependencies = [
  "chrono",
  "homelab-mcp-core",
  "homelab-mcp-k8s",
+ "kube",
  "model-catalog",
  "rmcp",
  "schemars",

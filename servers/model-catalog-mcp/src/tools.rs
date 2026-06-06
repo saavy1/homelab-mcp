@@ -3,8 +3,8 @@ use homelab_mcp_k8s::{
     DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, collect_capacity_report,
     create_download_job, create_inferenceservice, delete_inferenceservice, delete_runtime_recipe,
     download_job_name, dry_run_inferenceservice, get_download_status, get_inferenceservice_status,
-    get_predictor_logs, get_runtime_deployment, list_runtime_deployments, list_runtime_recipes,
-    upsert_runtime_deployment, upsert_runtime_recipe,
+    get_predictor_logs, list_runtime_deployments, list_runtime_recipes,
+    update_runtime_deployment_status, upsert_runtime_deployment, upsert_runtime_recipe,
 };
 use model_catalog::{
     ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, RuntimeRecipeRecord, load_recipe_dir,
@@ -526,22 +526,29 @@ impl ModelCatalogTools {
             .await
             .map_err(|error| error.to_string())?;
 
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let status = model_catalog::ModelDeploymentStatus {
+            state: model_catalog::DeploymentState::Stopped,
+            observed_generation: None,
+            last_transition_time: Some(now),
+            failure_reason: None,
+            kserve_ready: false,
+            url: None,
+        };
         let client = homelab_mcp_k8s::k8s_client()
             .await
             .map_err(|error| error.to_string())?;
-        if let Some(mut record) =
-            get_runtime_deployment(client, &self.runtime_state_namespace, &params.name)
-                .await
-                .map_err(|error| error.to_string())?
+        match update_runtime_deployment_status(
+            client,
+            &self.runtime_state_namespace,
+            &params.name,
+            &status,
+        )
+        .await
         {
-            record.status = model_catalog::DeploymentState::Stopped;
-            record.failure_reason = None;
-            let client = homelab_mcp_k8s::k8s_client()
-                .await
-                .map_err(|error| error.to_string())?;
-            upsert_runtime_deployment(client, &self.runtime_state_namespace, &record)
-                .await
-                .map_err(|error| error.to_string())?;
+            Ok(()) => {}
+            Err(kube::Error::Api(api_status)) if api_status.code == 404 => {}
+            Err(error) => return Err(error.to_string()),
         }
 
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(

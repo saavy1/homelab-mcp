@@ -8,18 +8,16 @@ use rmcp::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
 };
-use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tools::ModelCatalogTools;
 
 #[tool_handler(
     name = "model-catalog-mcp",
     version = "0.1.0",
     instructions = "Imperative model deployer for the Superbloom homelab. \
-        Workflow: search_recipes → plan_deploy → ensure_weights → apply_plan → status. \
-        Recipes are YAML files loaded from a K8s ConfigMap mounted at /etc/model-catalog/recipes. \
-        To add a new recipe, edit the ConfigMap at \
-        sb/argocd/clusters/superbloom/infra/model-catalog-mcp/resources/configmap.yaml \
-        in the sb GitOps repo, then push and wait for ArgoCD sync. \
+        Workflow: search_recipes → plan_deploy → ensure_weights → deploy_model → list_deployments. \
+        Stable recipes are loaded from mounted YAML files. Runtime recipes and deployments are \
+        stored as models.saavylab.dev CRDs and managed through typed MCP tools. \
         Recipe env vars must be {name, value} objects, not KEY=VALUE strings."
 )]
 impl ServerHandler for ModelCatalogTools {}
@@ -35,6 +33,19 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("/etc/model-catalog/spark-arena"));
     let runtime_state_namespace =
         env::var("MODEL_CATALOG_STATE_NAMESPACE").unwrap_or_else(|_| "hermes".into());
+    let reconciler_namespace = runtime_state_namespace.clone();
+    match homelab_mcp_k8s::k8s_client().await {
+        Ok(client) => {
+            tokio::spawn(homelab_mcp_k8s::run_model_deployment_reconciler(
+                client,
+                reconciler_namespace,
+                Duration::from_secs(15),
+            ));
+        }
+        Err(error) => {
+            tracing::warn!(%error, "model deployment reconciler disabled: Kubernetes client unavailable");
+        }
+    }
     let prometheus_base_url = env::var("PROMETHEUS_BASE_URL").ok();
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
