@@ -11,6 +11,7 @@ pub enum RecipeSource {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[non_exhaustive]
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeEngine {
     #[default]

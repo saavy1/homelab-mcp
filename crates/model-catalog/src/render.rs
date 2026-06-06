@@ -2,6 +2,7 @@ use crate::{DeploymentPlan, RuntimeEngine};
 use homelab_mcp_core::{HomelabMcpError, HomelabResult, sanitize_label_value};
 use serde_json::{Value, json};
 
+#[allow(unreachable_patterns)]
 pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
     // Derive the NAS mount point: parent of org/model in the model_path.
     // e.g. /mnt/nas/models/LiquidAI/LFM2.5-350M -> /mnt/nas/models
@@ -21,8 +22,22 @@ pub fn render_kserve_value(plan: &DeploymentPlan) -> Value {
         }
         RuntimeEngine::Sglang => {
             let model_arg = format!("--model-path={}", plan.model_path);
-            let args = render_sglang_runtime_args(plan, model_arg);
+            let served_model_arg = format!("--served-model-name={}", plan.name);
+            let args = render_sglang_runtime_args(plan, model_arg, served_model_arg);
             (json!(["sglang", "serve"]), args)
+        }
+        _ => {
+            tracing::warn!(
+                engine = ?plan.runtime_engine,
+                "unknown runtime engine, defaulting to vLLM rendering"
+            );
+            let model_arg = format!("--model={}", plan.model_path);
+            let served_model_arg = format!("--served-model-name={}", plan.name);
+            let args = render_vllm_runtime_args(plan, model_arg, served_model_arg);
+            (
+                json!(["python3", "-m", "vllm.entrypoints.openai.api_server"]),
+                args,
+            )
         }
     };
     let env = render_runtime_env(plan);
@@ -146,9 +161,14 @@ fn is_vllm_server_managed_arg(arg: &str) -> bool {
         || arg.starts_with("--served-model-name=")
 }
 
-fn render_sglang_runtime_args(plan: &DeploymentPlan, model_arg: String) -> Vec<String> {
+fn render_sglang_runtime_args(
+    plan: &DeploymentPlan,
+    model_arg: String,
+    served_model_arg: String,
+) -> Vec<String> {
     let mut args = vec![
         model_arg,
+        served_model_arg,
         "--host=0.0.0.0".to_string(),
         format!("--port={}", plan.runtime_port),
     ];
@@ -173,13 +193,18 @@ fn render_sglang_runtime_args(plan: &DeploymentPlan, model_arg: String) -> Vec<S
 }
 
 fn is_sglang_server_managed_arg(arg: &str) -> bool {
-    matches!(arg, "--host" | "--port" | "--model-path")
-        || arg.starts_with("--host=")
+    matches!(
+        arg,
+        "--host" | "--port" | "--model-path" | "--served-model-name"
+    ) || arg.starts_with("--host=")
         || arg.starts_with("--port=")
         || arg.starts_with("--model-path=")
+        || arg.starts_with("--served-model-name=")
 }
 
 fn render_runtime_env(plan: &DeploymentPlan) -> Vec<Value> {
+    // NOTE: Both vLLM and SGLang use HuggingFace libraries (transformers, hub)
+    // under the hood, so these offline env vars are respected by both engines.
     let mut env = vec![
         json!({ "name": "HF_HUB_OFFLINE", "value": "1" }),
         json!({ "name": "TRANSFORMERS_OFFLINE", "value": "1" }),
@@ -492,8 +517,8 @@ provenance:
             "args must not contain --model="
         );
         assert!(
-            !args.iter().any(|a| a.starts_with("--served-model-name=")),
-            "args must not contain --served-model-name="
+            args.iter().any(|a| a.starts_with("--served-model-name=")),
+            "args must contain --served-model-name="
         );
         assert!(args.contains(&"--flashinfer"));
         assert!(args.contains(&"--kv-cache-dtype=fp8"));
@@ -548,6 +573,158 @@ provenance:
         assert!(!args.contains(&"--port"));
         assert!(!args.contains(&"9999"));
         assert!(args.contains(&"--port=8000"));
+        assert!(args.contains(&"--flashinfer"));
+    }
+
+    #[test]
+    fn sglang_managed_model_path_equals_form_is_filtered() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args:
+    - --model-path=/custom/path
+    - --flashinfer
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args: Vec<&str> = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(
+            !args.contains(&"--model-path=/custom/path"),
+            "user --model-path=/custom/path must be filtered"
+        );
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--model-path=") && *a != "--model-path=/custom/path"),
+            "plan-derived --model-path must be present"
+        );
+        assert!(args.contains(&"--flashinfer"));
+    }
+
+    #[test]
+    fn sglang_managed_model_path_split_form_is_filtered() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args:
+    - --model-path
+    - /custom/path
+    - --flashinfer
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args: Vec<&str> = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(!args.contains(&"--model-path"));
+        assert!(!args.contains(&"/custom/path"));
+        assert!(
+            args.iter().any(|a| a.starts_with("--model-path=")),
+            "plan-derived --model-path must be present"
+        );
+        assert!(args.contains(&"--flashinfer"));
+    }
+
+    #[test]
+    fn sglang_managed_host_override_is_filtered() {
+        let yaml = r#"
+id: sglang-test
+source: local
+model:
+  id: test/model
+runtime:
+  image: sglang/sglang:latest
+  engine: sglang
+  args:
+    - --host=1.2.3.4
+    - --host
+    - 5.6.7.8
+    - --flashinfer
+  env: []
+hardware:
+  gpu_class: gb10
+  gpu_count: 1
+serving:
+  namespace: ai
+  replicas: 1
+  storage_mode: ephemeral
+  ingress_policy: cluster-local
+provenance:
+  source: local
+"#;
+        let recipe = parse_recipe_yaml(yaml).expect("recipe parses");
+        let plan = plan_deploy(
+            &recipe,
+            &ClusterProfile::superbloom_default(),
+            DeployOverrides::empty(),
+        )
+        .data;
+        let value = render_kserve_value(&plan);
+        let args: Vec<&str> = value["spec"]["predictor"]["containers"][0]["args"]
+            .as_array()
+            .expect("args array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        assert!(!args.contains(&"--host=1.2.3.4"));
+        assert!(!args.contains(&"--host"));
+        assert!(!args.contains(&"1.2.3.4"));
+        assert!(!args.contains(&"5.6.7.8"));
+        assert!(args.contains(&"--host=0.0.0.0"));
         assert!(args.contains(&"--flashinfer"));
     }
 

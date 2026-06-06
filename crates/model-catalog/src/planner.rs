@@ -127,6 +127,7 @@ fn merge_env(default_env: &[EnvVar], override_env: &[EnvVar]) -> Vec<EnvVar> {
     merged
 }
 
+#[allow(unreachable_patterns)]
 pub fn plan_deploy(
     recipe: &Recipe,
     profile: &ClusterProfile,
@@ -148,6 +149,7 @@ pub fn plan_deploy(
     let runtime_port = recipe.runtime.port.unwrap_or(match runtime_engine {
         RuntimeEngine::Vllm => 8080,
         RuntimeEngine::Sglang => 8000,
+        _ => 8080,
     });
     let mut plan = DeploymentPlan {
         name,
