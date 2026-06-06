@@ -142,7 +142,7 @@ pub async fn dry_run_apply_inferenceservice(
     obj.data = manifest;
     let params = PatchParams {
         dry_run: true,
-        ..PatchParams::apply("model-catalog-mcp")
+        ..PatchParams::apply("model-catalog-mcp").force()
     };
     let applied = isvc.patch(&name, &params, &Patch::Apply(&obj)).await?;
     Ok(applied.metadata.name.unwrap_or(name))
