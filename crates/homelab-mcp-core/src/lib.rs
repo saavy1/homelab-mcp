@@ -133,9 +133,7 @@ pub fn init_tracing_with_service(fallback_service_name: &str) {
         match try_init_otel(&service_name, &endpoint) {
             Ok(()) => return,
             Err(e) => {
-                eprintln!(
-                    "OTLP tracer initialization failed, continuing with JSON logs only: {e}"
-                );
+                eprintln!("OTLP tracer initialization failed, continuing with JSON logs only: {e}");
             }
         }
     }
@@ -189,12 +187,15 @@ fn try_init_otel(service_name: &str, endpoint: &str) -> Result<(), String> {
     opentelemetry::global::set_tracer_provider(provider.clone());
 
     let tracer = provider.tracer("homelab-mcp");
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    let env_filter = EnvFilter::from_default_env();
+    let otel_layer = tracing_opentelemetry::layer()
+        .with_tracer(tracer)
+        .with_filter(env_filter.clone());
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_target(true)
-        .with_filter(EnvFilter::from_default_env());
+        .with_filter(env_filter);
 
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)

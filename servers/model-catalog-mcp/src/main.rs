@@ -24,7 +24,7 @@ impl ServerHandler for ModelCatalogTools {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    homelab_mcp_core::init_tracing();
+    homelab_mcp_core::init_tracing_with_service("model-catalog-mcp");
     let recipe_dir = env::var("MODEL_CATALOG_RECIPE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/etc/model-catalog/recipes"));
