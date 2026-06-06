@@ -155,7 +155,9 @@ pub async fn reconcile_model_deployments_once(
     for deployment in list {
         let existing_status = deployment.status.as_ref();
 
-        if let Some(s) = existing_status && s.state == DeploymentState::Stopped {
+        if let Some(s) = existing_status
+            && s.state == DeploymentState::Stopped
+        {
             continue;
         }
 
@@ -297,6 +299,16 @@ mod tests {
     }
 
     #[test]
+    fn ready_unknown_maps_to_applying_and_kserve_ready_false() {
+        let conditions = vec![make_condition("Ready", "Unknown", None, None)];
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Applying);
+        assert!(!status.kserve_ready);
+        assert_eq!(status.failure_reason, None);
+        assert_eq!(status.observed_generation, Some(1));
+    }
+
+    #[test]
     fn missing_inferenceservice_maps_to_failed_with_exact_reason() {
         let status = missing_inferenceservice_status(None, Some(1));
         assert_eq!(status.state, DeploymentState::Failed);
@@ -376,5 +388,65 @@ mod tests {
             status.last_transition_time,
             Some("2024-01-01T00:00:00Z".into())
         );
+    }
+
+    #[test]
+    fn dynamic_parsing_extracts_conditions_and_url_from_kserve_json() {
+        let ar = ApiResource {
+            group: "serving.kserve.io".into(),
+            version: "v1beta1".into(),
+            kind: "InferenceService".into(),
+            api_version: "serving.kserve.io/v1beta1".into(),
+            plural: "inferenceservices".into(),
+        };
+        let mut obj = DynamicObject::new("my-model", &ar);
+        obj.data = serde_json::json!({
+            "status": {
+                "url": "http://my-model.example.com",
+                "conditions": [
+                    {
+                        "type": "Ready",
+                        "status": "True",
+                        "lastTransitionTime": "2024-01-01T00:00:00Z",
+                        "reason": "AllGood",
+                        "message": "Deployment is ready"
+                    },
+                    {
+                        "type": "Predictable",
+                        "status": "True",
+                        "lastTransitionTime": "2024-01-01T00:00:00Z",
+                        "reason": "Predictable",
+                        "message": "Predictable"
+                    }
+                ]
+            }
+        });
+
+        let conditions = dynamic_conditions(&obj);
+        assert_eq!(conditions.len(), 2);
+        assert_eq!(conditions[0].type_, "Ready");
+        assert_eq!(conditions[0].status, "True");
+        assert_eq!(conditions[0].reason, "AllGood");
+        assert_eq!(conditions[0].message, "Deployment is ready");
+
+        let url = dynamic_url(&obj);
+        assert_eq!(url, Some("http://my-model.example.com".to_string()));
+    }
+
+    #[test]
+    fn dynamic_parsing_handles_empty_status() {
+        let ar = ApiResource {
+            group: "serving.kserve.io".into(),
+            version: "v1beta1".into(),
+            kind: "InferenceService".into(),
+            api_version: "serving.kserve.io/v1beta1".into(),
+            plural: "inferenceservices".into(),
+        };
+        let mut obj = DynamicObject::new("my-model", &ar);
+        obj.data = serde_json::json!({"status": {}});
+
+        let conditions = dynamic_conditions(&obj);
+        assert!(conditions.is_empty());
+        assert_eq!(dynamic_url(&obj), None);
     }
 }
