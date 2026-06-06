@@ -710,6 +710,7 @@ dependencies = [
 name = "homelab-mcp-k8s"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "homelab-mcp-core",
  "k8s-openapi",
  "kube",
@@ -720,6 +721,8 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

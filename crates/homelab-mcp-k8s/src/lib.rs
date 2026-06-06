@@ -1,6 +1,7 @@
 pub mod capacity;
 pub mod download;
 pub mod live;
+pub mod reconciler;
 pub mod runtime_store;
 pub mod status;
 
@@ -11,6 +12,7 @@ pub use live::{
     dry_run_inferenceservice, get_download_status, get_events, get_inferenceservice_status,
     get_predictor_logs, k8s_client,
 };
+pub use reconciler::{reconcile_model_deployments_once, run_model_deployment_reconciler};
 pub use runtime_store::{
     delete_runtime_recipe, get_runtime_deployment, get_runtime_recipe, list_runtime_deployments,
     list_runtime_recipes, update_runtime_deployment_status, upsert_runtime_deployment,
