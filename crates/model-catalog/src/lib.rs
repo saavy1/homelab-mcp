@@ -1,5 +1,6 @@
 pub mod arena;
 pub mod capacity;
+pub mod crds;
 pub mod digest;
 pub mod planner;
 pub mod policy;
@@ -14,6 +15,7 @@ pub use capacity::{
     ActiveModelCapacity, CapacityReport, FitConfidence, FitEstimate, estimate_fit_from_report,
     estimate_fit_from_report_with_vram,
 };
+pub use crds::*;
 pub use digest::{compute_plan_digest, plan_to_digest_input};
 pub use planner::{DeployOverrides, plan_deploy, validate_fit};
 pub use policy::validate_plan_policy;
