@@ -8,9 +8,9 @@ pub mod status;
 pub use capacity::collect_capacity_report;
 pub use download::{DownloadJobSpec, build_download_job, download_job_name};
 pub use live::{
-    create_download_job, create_inferenceservice, delete_inferenceservice,
-    dry_run_inferenceservice, get_download_status, get_events, get_inferenceservice_status,
-    get_predictor_logs, k8s_client,
+    apply_inferenceservice, create_download_job, create_inferenceservice, delete_inferenceservice,
+    dry_run_apply_inferenceservice, dry_run_inferenceservice, get_download_status, get_events,
+    get_inferenceservice_status, get_predictor_logs, k8s_client,
 };
 pub use reconciler::{reconcile_model_deployments_once, run_model_deployment_reconciler};
 pub use runtime_store::{

@@ -1,10 +1,11 @@
 use homelab_mcp_core::compute_digest;
 use homelab_mcp_k8s::{
-    DownloadJobRef, DownloadJobSpec, DownloadStatus, build_download_job, collect_capacity_report,
-    create_download_job, create_inferenceservice, delete_inferenceservice, delete_runtime_recipe,
-    download_job_name, dry_run_inferenceservice, get_download_status, get_inferenceservice_status,
-    get_predictor_logs, list_runtime_deployments, list_runtime_recipes,
-    update_runtime_deployment_status, upsert_runtime_deployment, upsert_runtime_recipe,
+    DownloadJobRef, DownloadJobSpec, DownloadStatus, apply_inferenceservice, build_download_job,
+    collect_capacity_report, create_download_job, delete_inferenceservice, delete_runtime_recipe,
+    download_job_name, dry_run_apply_inferenceservice, get_download_status,
+    get_inferenceservice_status, get_predictor_logs, list_runtime_deployments,
+    list_runtime_recipes, update_runtime_deployment_status, upsert_runtime_deployment,
+    upsert_runtime_recipe,
 };
 use model_catalog::{
     ClusterProfile, DeployOverrides, DeploymentPlan, Recipe, RuntimeRecipeRecord, load_recipe_dir,
@@ -410,15 +411,15 @@ impl ModelCatalogTools {
         }
 
         let value = render_kserve_value(&plan);
-        let created = create_inferenceservice(value, &plan.namespace)
+        let created = apply_inferenceservice(value, &plan.namespace)
             .await
-            .map_err(|e| format!("create InferenceService: {e}"))?;
+            .map_err(|e| format!("apply InferenceService: {e}"))?;
         info!(name = %plan.name, namespace = %plan.namespace, "applied InferenceService");
         let response = serde_json::json!({
-            "action": "created_inferenceservice",
+            "action": "applied_inferenceservice",
             "name": plan.name,
             "namespace": plan.namespace,
-            "mode": "CreateOnly",
+            "mode": "Apply",
             "risk": "cluster-write",
             "created_name": created,
         });
@@ -478,12 +479,12 @@ impl ModelCatalogTools {
         }
         let plan = result.data;
         let manifest = model_catalog::render_kserve_value(&plan);
-        dry_run_inferenceservice(manifest.clone(), &plan.namespace)
+        dry_run_apply_inferenceservice(manifest.clone(), &plan.namespace)
             .await
             .map_err(|error| format!("dry-run InferenceService: {error}"))?;
-        let created = create_inferenceservice(manifest, &plan.namespace)
+        let created = apply_inferenceservice(manifest, &plan.namespace)
             .await
-            .map_err(|error| format!("create InferenceService: {error}"))?;
+            .map_err(|error| format!("apply InferenceService: {error}"))?;
         let now = chrono::Utc::now().to_rfc3339();
         let record = model_catalog::RuntimeDeploymentRecord {
             name: plan.name.clone(),
@@ -638,7 +639,7 @@ impl ModelCatalogTools {
             .map_err(|error| error.to_string())?;
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("imported runtime recipe {}", record.recipe.id),
-            serde_json::json!({ "configmap": name, "recipe_id": record.recipe.id }),
+            serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
         ))
         .map_err(|error| error.to_string())
     }
@@ -663,7 +664,7 @@ impl ModelCatalogTools {
             .map_err(|error| error.to_string())?;
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("stored runtime recipe {}", record.recipe.id),
-            serde_json::json!({ "configmap": name, "recipe_id": record.recipe.id }),
+            serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
         ))
         .map_err(|error| error.to_string())
     }

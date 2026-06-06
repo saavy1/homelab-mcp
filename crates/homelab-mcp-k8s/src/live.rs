@@ -4,7 +4,7 @@ use k8s_openapi::api::core::v1 as corev1;
 use kube::core::dynamic::DynamicObject;
 use kube::{
     Api, Client,
-    api::{DeleteParams, ListParams, LogParams, PostParams},
+    api::{DeleteParams, ListParams, LogParams, Patch, PatchParams, PostParams},
     discovery::ApiResource,
 };
 
@@ -101,6 +101,51 @@ pub async fn create_inferenceservice(
     obj.data = manifest;
     let created = isvc.create(&PostParams::default(), &obj).await?;
     Ok(created.metadata.name.unwrap_or_default())
+}
+
+/// Apply (upsert) an InferenceService using server-side apply. Returns the resource name.
+pub async fn apply_inferenceservice(
+    manifest: serde_json::Value,
+    namespace: &str,
+) -> Result<String, kube::Error> {
+    let ar = isvc_api_resource();
+    let client = k8s_client().await?;
+    let isvc: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let name = manifest
+        .get("metadata")
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let mut obj = DynamicObject::new(&name, &ar).within(namespace);
+    obj.data = manifest;
+    let params = PatchParams::apply("model-catalog-mcp").force();
+    let applied = isvc.patch(&name, &params, &Patch::Apply(&obj)).await?;
+    Ok(applied.metadata.name.unwrap_or(name))
+}
+
+/// Dry-run apply an InferenceService. Returns the resource name.
+pub async fn dry_run_apply_inferenceservice(
+    manifest: serde_json::Value,
+    namespace: &str,
+) -> Result<String, kube::Error> {
+    let ar = isvc_api_resource();
+    let client = k8s_client().await?;
+    let isvc: Api<DynamicObject> = Api::namespaced_with(client, namespace, &ar);
+    let name = manifest
+        .get("metadata")
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let mut obj = DynamicObject::new(&name, &ar).within(namespace);
+    obj.data = manifest;
+    let params = PatchParams {
+        dry_run: true,
+        ..PatchParams::apply("model-catalog-mcp")
+    };
+    let applied = isvc.patch(&name, &params, &Patch::Apply(&obj)).await?;
+    Ok(applied.metadata.name.unwrap_or(name))
 }
 
 /// Delete an InferenceService by name. Idempotent: returns Ok if 404.

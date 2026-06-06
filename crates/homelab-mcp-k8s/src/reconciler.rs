@@ -4,6 +4,24 @@ use model_catalog::{DeploymentState, ModelDeployment, ModelDeploymentStatus};
 
 use crate::update_runtime_deployment_status;
 
+/// Determine whether a KServe `Ready=False` condition represents a terminal failure.
+///
+/// Returns `true` if the reason or message contains case-insensitive substrings
+/// associated with unrecoverable errors.
+pub fn is_terminal_ready_false(reason: &str, message: &str) -> bool {
+    let combined = format!("{} {}", reason, message).to_lowercase();
+    const TERMINAL_KEYWORDS: &[&str] = &[
+        "failed",
+        "error",
+        "invalid",
+        "crash",
+        "imagepull",
+        "errimagepull",
+        "backoff",
+    ];
+    TERMINAL_KEYWORDS.iter().any(|kw| combined.contains(kw))
+}
+
 /// Build a `ModelDeploymentStatus` with transition-time logic.
 ///
 /// `last_transition_time` is updated only when `state` differs from the
@@ -56,18 +74,40 @@ pub fn status_from_kserve_conditions(
         ),
         Some("False") => {
             let reason = ready
+                .map(|c| c.reason.clone())
+                .filter(|r| !r.is_empty())
+                .unwrap_or_default();
+            let message = ready
                 .map(|c| c.message.clone())
                 .filter(|m| !m.is_empty())
-                .or_else(|| ready.map(|c| c.reason.clone()).filter(|r| !r.is_empty()))
-                .unwrap_or_else(|| "KServe Ready condition is False".into());
-            build_status(
-                existing,
-                DeploymentState::Failed,
-                observed_generation,
-                false,
-                Some(reason),
-                url,
-            )
+                .unwrap_or_default();
+            let failure_reason = if !message.is_empty() {
+                message.clone()
+            } else if !reason.is_empty() {
+                reason.clone()
+            } else {
+                "KServe Ready condition is False".into()
+            };
+
+            if is_terminal_ready_false(&reason, &message) {
+                build_status(
+                    existing,
+                    DeploymentState::Failed,
+                    observed_generation,
+                    false,
+                    Some(failure_reason),
+                    url,
+                )
+            } else {
+                build_status(
+                    existing,
+                    DeploymentState::Applying,
+                    observed_generation,
+                    false,
+                    Some(failure_reason),
+                    url,
+                )
+            }
         }
         _ => build_status(
             existing,
@@ -219,6 +259,32 @@ pub async fn reconcile_model_deployments_once(
             }
         };
 
+        // Re-fetch the deployment to avoid overwriting a Stopped status that was
+        // set concurrently (e.g. by stop_model) during this reconciliation pass.
+        let current = match api
+            .get(&deployment.metadata.name.clone().unwrap_or_default())
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    deployment = %deployment.spec.name,
+                    error = %e,
+                    "failed to re-fetch deployment before status patch"
+                );
+                continue;
+            }
+        };
+        if let Some(ref status) = current.status
+            && status.state == DeploymentState::Stopped
+        {
+            tracing::info!(
+                deployment = %deployment.spec.name,
+                "skipping status patch because deployment is now Stopped"
+            );
+            continue;
+        }
+
         if let Err(e) = update_runtime_deployment_status(
             client.clone(),
             state_namespace,
@@ -315,7 +381,8 @@ mod tests {
     fn ready_false_uses_reason_when_message_missing() {
         let conditions = vec![make_condition("Ready", "False", Some("SomeReason"), None)];
         let status = status_from_kserve_conditions(None, None, conditions, None);
-        assert_eq!(status.state, DeploymentState::Failed);
+        // "SomeReason" is not a terminal keyword, so it maps to Applying.
+        assert_eq!(status.state, DeploymentState::Applying);
         assert_eq!(status.failure_reason, Some("SomeReason".into()));
     }
 
@@ -511,5 +578,97 @@ mod tests {
         let status = status_from_kserve_conditions(None, Some(1), conditions, None);
         assert_eq!(status.state, DeploymentState::Ready);
         assert!(status.kserve_ready);
+    }
+
+    #[test]
+    fn terminal_ready_false_maps_to_failed() {
+        let conditions = vec![make_condition(
+            "Ready",
+            "False",
+            Some("CrashLoopBackOff"),
+            Some("container crashed"),
+        )];
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Failed);
+        assert!(!status.kserve_ready);
+        assert_eq!(status.failure_reason, Some("container crashed".into()));
+    }
+
+    #[test]
+    fn non_terminal_ready_false_maps_to_applying() {
+        let conditions = vec![make_condition(
+            "Ready",
+            "False",
+            Some("PredictorConfigurationReady"),
+            Some("Waiting for predictor"),
+        )];
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Applying);
+        assert!(!status.kserve_ready);
+        assert_eq!(status.failure_reason, Some("Waiting for predictor".into()));
+    }
+
+    #[test]
+    fn ready_false_err_image_pull_is_terminal() {
+        let conditions = vec![make_condition(
+            "Ready",
+            "False",
+            Some("RevisionFailed"),
+            Some("Failed to pull image"),
+        )];
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Failed);
+    }
+
+    #[test]
+    fn ready_false_backoff_is_terminal() {
+        let conditions = vec![make_condition(
+            "Ready",
+            "False",
+            Some("ProgressDeadlineExceeded"),
+            Some("Deployment has not progressed: backoff"),
+        )];
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Failed);
+    }
+
+    #[test]
+    fn ready_false_uses_reason_when_message_missing_non_terminal() {
+        let conditions = vec![make_condition("Ready", "False", Some("SomeReason"), None)];
+        let status = status_from_kserve_conditions(None, None, conditions, None);
+        assert_eq!(status.state, DeploymentState::Applying);
+        assert_eq!(status.failure_reason, Some("SomeReason".into()));
+    }
+
+    #[test]
+    fn ready_false_uses_reason_when_message_missing_terminal() {
+        let conditions = vec![make_condition(
+            "Ready",
+            "False",
+            Some("FailedConfiguration"),
+            None,
+        )];
+        let status = status_from_kserve_conditions(None, None, conditions, None);
+        assert_eq!(status.state, DeploymentState::Failed);
+        assert_eq!(status.failure_reason, Some("FailedConfiguration".into()));
+    }
+
+    #[test]
+    fn is_terminal_ready_false_keywords() {
+        assert!(is_terminal_ready_false(
+            "CrashLoopBackOff",
+            "container crashed"
+        ));
+        assert!(is_terminal_ready_false("Failed", ""));
+        assert!(is_terminal_ready_false("", "ImagePullBackOff"));
+        assert!(is_terminal_ready_false("ErrImagePull", ""));
+        assert!(is_terminal_ready_false("", "error connecting to backend"));
+        assert!(is_terminal_ready_false("Invalid", ""));
+        assert!(is_terminal_ready_false("", "Backoff"));
+        assert!(!is_terminal_ready_false(
+            "PredictorConfigurationReady",
+            "Waiting for predictor"
+        ));
+        assert!(!is_terminal_ready_false("", ""));
     }
 }
