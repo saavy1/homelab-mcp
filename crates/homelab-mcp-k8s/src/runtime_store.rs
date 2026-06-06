@@ -1,17 +1,26 @@
 use std::collections::BTreeMap;
 
-use k8s_openapi::api::core::v1::ConfigMap;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{
     Api, Client,
     api::{DeleteParams, ListParams, Patch, PatchParams},
 };
-use model_catalog::{RuntimeDeploymentRecord, RuntimeRecipeRecord};
-
-const RECIPE_LABEL: &str = "homelab.saavylab.dev/model-catalog-kind=runtime-recipe";
-const DEPLOYMENT_LABEL: &str = "homelab.saavylab.dev/model-catalog-kind=runtime-deployment";
+use model_catalog::{
+    ModelDeployment, ModelDeploymentStatus, ModelRecipe, RuntimeDeploymentRecord,
+    RuntimeRecipeRecord, deployment_parts_to_record, deployment_record_to_spec,
+    deployment_record_to_status, recipe_record_to_spec, recipe_spec_to_record,
+};
 
 fn runtime_name(prefix: &str, id: &str) -> String {
     format!("{}-{}", prefix, homelab_mcp_core::sanitize_dns_name(id))
+}
+
+fn recipe_resource_name(recipe_id: &str) -> String {
+    runtime_name("model-recipe", recipe_id)
+}
+
+fn deployment_resource_name(name: &str) -> String {
+    runtime_name("model-deployment", name)
 }
 
 /// Produce a Kubernetes label-safe value that is guaranteed to be ≤63 characters.
@@ -94,69 +103,31 @@ fn bounded_label_value(s: &str) -> String {
     }
 }
 
-fn decode_record<T: serde::de::DeserializeOwned>(cm: &ConfigMap) -> Result<T, kube::Error> {
-    let name = cm.metadata.name.as_deref().unwrap_or("<unknown>");
-    let data = cm.data.as_ref().ok_or_else(|| {
-        kube::Error::Service(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("ConfigMap {name} is missing data section"),
-        )))
-    })?;
-    let raw = data.get("record.yaml").ok_or_else(|| {
-        kube::Error::Service(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("ConfigMap {name} is missing record.yaml"),
-        )))
-    })?;
-    serde_yaml::from_str(raw).map_err(|error| {
-        let location = error.location();
-        let msg = match location {
-            Some(loc) => format!(
-                "ConfigMap {name} has invalid record.yaml at line {}, column {}",
-                loc.line(),
-                loc.column()
-            ),
-            None => format!("ConfigMap {name} has invalid record.yaml"),
-        };
-        kube::Error::Service(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            msg,
-        )))
-    })
-}
-
 pub async fn upsert_runtime_recipe(
     client: Client,
     namespace: &str,
     record: &RuntimeRecipeRecord,
 ) -> Result<String, kube::Error> {
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
-    let name = runtime_name("model-recipe", &record.recipe.id);
-    let mut labels = BTreeMap::new();
-    labels.insert(
-        "homelab.saavylab.dev/model-catalog-kind".into(),
-        "runtime-recipe".into(),
-    );
-    labels.insert(
-        "homelab.saavylab.dev/recipe-id".into(),
-        bounded_label_value(&record.recipe.id),
-    );
-    let mut data = BTreeMap::new();
-    data.insert(
-        "record.yaml".into(),
-        serde_yaml::to_string(record).map_err(|error| kube::Error::Service(Box::new(error)))?,
-    );
-    let cm = ConfigMap {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(name.clone()),
-            namespace: Some(namespace.into()),
-            labels: Some(labels),
-            ..Default::default()
-        },
-        data: Some(data),
+    let api: Api<ModelRecipe> = Api::namespaced(client, namespace);
+    let name = recipe_resource_name(&record.recipe.id);
+    let mut recipe = ModelRecipe::new(&name, recipe_record_to_spec(record));
+    recipe.metadata = ObjectMeta {
+        name: Some(name.clone()),
+        namespace: Some(namespace.into()),
+        labels: Some(BTreeMap::from([
+            (
+                "app.kubernetes.io/part-of".into(),
+                "model-catalog-mcp".into(),
+            ),
+            ("models.saavylab.dev/kind".into(), "recipe".into()),
+            (
+                "models.saavylab.dev/recipe-id".into(),
+                bounded_label_value(&record.recipe.id),
+            ),
+        ])),
         ..Default::default()
     };
-    let patch = Patch::Apply(&cm);
+    let patch = Patch::Apply(&recipe);
     let params = PatchParams::apply("model-catalog-mcp").force();
     let applied = api.patch(&name, &params, &patch).await?;
     Ok(applied.metadata.name.unwrap_or(name))
@@ -166,11 +137,14 @@ pub async fn list_runtime_recipes(
     client: Client,
     namespace: &str,
 ) -> Result<Vec<RuntimeRecipeRecord>, kube::Error> {
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
+    let api: Api<ModelRecipe> = Api::namespaced(client, namespace);
     let list = api
-        .list(&ListParams::default().labels(RECIPE_LABEL))
+        .list(&ListParams::default().labels("models.saavylab.dev/kind=recipe"))
         .await?;
-    list.iter().map(decode_record).collect()
+    Ok(list
+        .iter()
+        .map(|recipe| recipe_spec_to_record(&recipe.spec))
+        .collect())
 }
 
 pub async fn get_runtime_recipe(
@@ -178,19 +152,12 @@ pub async fn get_runtime_recipe(
     namespace: &str,
     recipe_id: &str,
 ) -> Result<Option<RuntimeRecipeRecord>, kube::Error> {
-    let records = list_runtime_recipes(client, namespace).await?;
-    Ok(records
-        .into_iter()
-        .find(|record| record.recipe.id == recipe_id))
-}
-
-pub async fn get_runtime_deployment(
-    client: Client,
-    namespace: &str,
-    name: &str,
-) -> Result<Option<RuntimeDeploymentRecord>, kube::Error> {
-    let records = list_runtime_deployments(client, namespace).await?;
-    Ok(records.into_iter().find(|record| record.name == name))
+    let api: Api<ModelRecipe> = Api::namespaced(client, namespace);
+    let name = recipe_resource_name(recipe_id);
+    match api.get_opt(&name).await? {
+        Some(recipe) => Ok(Some(recipe_spec_to_record(&recipe.spec))),
+        None => Ok(None),
+    }
 }
 
 pub async fn delete_runtime_recipe(
@@ -198,8 +165,8 @@ pub async fn delete_runtime_recipe(
     namespace: &str,
     recipe_id: &str,
 ) -> Result<(), kube::Error> {
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
-    let name = runtime_name("model-recipe", recipe_id);
+    let api: Api<ModelRecipe> = Api::namespaced(client, namespace);
+    let name = recipe_resource_name(recipe_id);
     match api.delete(&name, &DeleteParams::default()).await {
         Ok(_) => Ok(()),
         Err(kube::Error::Api(status)) if status.code == 404 => Ok(()),
@@ -212,47 +179,89 @@ pub async fn upsert_runtime_deployment(
     namespace: &str,
     record: &RuntimeDeploymentRecord,
 ) -> Result<String, kube::Error> {
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
-    let name = runtime_name("model-deployment", &record.name);
-    let mut labels = BTreeMap::new();
-    labels.insert(
-        "homelab.saavylab.dev/model-catalog-kind".into(),
-        "runtime-deployment".into(),
-    );
-    labels.insert(
-        "homelab.saavylab.dev/deployment-name".into(),
-        bounded_label_value(&record.name),
-    );
-    let mut data = BTreeMap::new();
-    data.insert(
-        "record.yaml".into(),
-        serde_yaml::to_string(record).map_err(|error| kube::Error::Service(Box::new(error)))?,
-    );
-    let cm = ConfigMap {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(name.clone()),
-            namespace: Some(namespace.into()),
-            labels: Some(labels),
-            ..Default::default()
-        },
-        data: Some(data),
+    let api: Api<ModelDeployment> = Api::namespaced(client.clone(), namespace);
+    let name = deployment_resource_name(&record.name);
+    let mut deployment = ModelDeployment::new(&name, deployment_record_to_spec(record));
+    deployment.metadata = ObjectMeta {
+        name: Some(name.clone()),
+        namespace: Some(namespace.into()),
+        labels: Some(BTreeMap::from([
+            (
+                "app.kubernetes.io/part-of".into(),
+                "model-catalog-mcp".into(),
+            ),
+            ("models.saavylab.dev/kind".into(), "deployment".into()),
+            (
+                "models.saavylab.dev/deployment-name".into(),
+                bounded_label_value(&record.name),
+            ),
+            (
+                "models.saavylab.dev/target".into(),
+                bounded_label_value(&record.target),
+            ),
+        ])),
         ..Default::default()
     };
-    let patch = Patch::Apply(&cm);
+    let patch = Patch::Apply(&deployment);
     let params = PatchParams::apply("model-catalog-mcp").force();
     let applied = api.patch(&name, &params, &patch).await?;
-    Ok(applied.metadata.name.unwrap_or(name))
+    let result = applied.metadata.name.unwrap_or(name);
+    update_runtime_deployment_status(
+        client,
+        namespace,
+        &record.name,
+        &deployment_record_to_status(record),
+    )
+    .await?;
+    Ok(result)
 }
 
 pub async fn list_runtime_deployments(
     client: Client,
     namespace: &str,
 ) -> Result<Vec<RuntimeDeploymentRecord>, kube::Error> {
-    let api: Api<ConfigMap> = Api::namespaced(client, namespace);
+    let api: Api<ModelDeployment> = Api::namespaced(client, namespace);
     let list = api
-        .list(&ListParams::default().labels(DEPLOYMENT_LABEL))
+        .list(&ListParams::default().labels("models.saavylab.dev/kind=deployment"))
         .await?;
-    list.iter().map(decode_record).collect()
+    Ok(list
+        .iter()
+        .map(|deployment| deployment_parts_to_record(&deployment.spec, deployment.status.as_ref()))
+        .collect())
+}
+
+pub async fn get_runtime_deployment(
+    client: Client,
+    namespace: &str,
+    name: &str,
+) -> Result<Option<RuntimeDeploymentRecord>, kube::Error> {
+    let api: Api<ModelDeployment> = Api::namespaced(client, namespace);
+    let name = deployment_resource_name(name);
+    match api.get_opt(&name).await? {
+        Some(deployment) => Ok(Some(deployment_parts_to_record(
+            &deployment.spec,
+            deployment.status.as_ref(),
+        ))),
+        None => Ok(None),
+    }
+}
+
+pub async fn update_runtime_deployment_status(
+    client: Client,
+    namespace: &str,
+    name: &str,
+    status: &ModelDeploymentStatus,
+) -> Result<(), kube::Error> {
+    let api: Api<ModelDeployment> = Api::namespaced(client, namespace);
+    let resource_name = deployment_resource_name(name);
+    let patch = serde_json::json!({ "status": status });
+    api.patch_status(
+        &resource_name,
+        &PatchParams::default(),
+        &Patch::Merge(&patch),
+    )
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -260,166 +269,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_name_sanitizes_ids() {
+    fn recipe_resource_name_sanitizes_recipe_ids() {
         assert_eq!(
-            runtime_name("model-recipe", "deepseek-ai/DeepSeek-V4-Flash"),
+            recipe_resource_name("deepseek-ai/DeepSeek-V4-Flash"),
             "model-recipe-deepseek-ai-deepseek-v4-flash"
         );
     }
 
     #[test]
-    fn decode_record_missing_record_yaml() {
-        let cm = ConfigMap {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("test-cm".into()),
-                ..Default::default()
-            },
-            data: Some(BTreeMap::new()),
-            ..Default::default()
-        };
-        let result: Result<RuntimeRecipeRecord, kube::Error> = decode_record(&cm);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("test-cm"),
-            "error should mention ConfigMap name: {msg}"
-        );
-        assert!(
-            msg.contains("record.yaml"),
-            "error should mention record.yaml: {msg}"
+    fn deployment_resource_name_sanitizes_names() {
+        assert_eq!(
+            deployment_resource_name("lfm25-350m"),
+            "model-deployment-lfm25-350m"
         );
     }
 
     #[test]
-    fn decode_record_malformed_yaml() {
-        let mut data = BTreeMap::new();
-        data.insert("record.yaml".into(), "not: valid: [yaml".into());
-        let cm = ConfigMap {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("bad-cm".into()),
-                ..Default::default()
-            },
-            data: Some(data),
-            ..Default::default()
-        };
-        let result: Result<RuntimeRecipeRecord, kube::Error> = decode_record(&cm);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("bad-cm"),
-            "error should mention ConfigMap name: {msg}"
+    fn bounded_label_value_keeps_values_under_limit() {
+        let value = bounded_label_value(
+            "deepseek-ai/DeepSeek-V4-Flash-with-a-very-long-suffix-that-exceeds-kubernetes-label-limits",
         );
-        assert!(
-            msg.contains("record.yaml"),
-            "error should mention record.yaml: {msg}"
-        );
-    }
-
-    #[test]
-    fn decode_record_valid_yaml() {
-        let yaml = r#"
-name: test-deployment
-namespace: ai
-recipe_id: test-recipe
-target: spark
-runtime_args: []
-runtime_env: []
-resources:
-  cpu: "2"
-  memory: "16Gi"
-  gpu_count: 1
-status: planned
-last_plan_digest: abc123
-created_by: test
-created_at: "2024-01-01T00:00:00Z"
-"#;
-        let mut data = BTreeMap::new();
-        data.insert("record.yaml".into(), yaml.into());
-        let cm = ConfigMap {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("good-cm".into()),
-                ..Default::default()
-            },
-            data: Some(data),
-            ..Default::default()
-        };
-        let record: RuntimeDeploymentRecord = decode_record(&cm).unwrap();
-        assert_eq!(record.name, "test-deployment");
-        assert_eq!(record.namespace, "ai");
-        assert_eq!(record.recipe_id, "test-recipe");
-    }
-
-    #[test]
-    fn decode_record_malformed_yaml_does_not_leak_content() {
-        let mut data = BTreeMap::new();
-        data.insert("record.yaml".into(), "secret-password: abc123".into());
-        let cm = ConfigMap {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("bad-cm".into()),
-                ..Default::default()
-            },
-            data: Some(data),
-            ..Default::default()
-        };
-        let result: Result<RuntimeRecipeRecord, kube::Error> = decode_record(&cm);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("bad-cm"),
-            "error should mention ConfigMap name: {msg}"
-        );
-        assert!(
-            msg.contains("record.yaml"),
-            "error should mention record.yaml: {msg}"
-        );
-        assert!(
-            !msg.contains("secret-password"),
-            "error should NOT leak raw record.yaml content: {msg}"
-        );
-        assert!(
-            !msg.contains("abc123"),
-            "error should NOT leak raw record.yaml content: {msg}"
-        );
-    }
-
-    #[test]
-    fn decode_record_invalid_enum_does_not_leak_scalar() {
-        let yaml = r#"name: test
-namespace: default
-recipe_id: test
-target: spark
-runtime_args: []
-runtime_env: []
-resources:
-  cpu: "2"
-  memory: "16Gi"
-  gpu_count: 1
-status: secret-password
-last_plan_digest: abc123
-created_by: test
-created_at: "2024-01-01T00:00:00Z"
-"#;
-        let mut data = BTreeMap::new();
-        data.insert("record.yaml".into(), yaml.into());
-        let cm = ConfigMap {
-            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-                name: Some("leaky-cm".into()),
-                ..Default::default()
-            },
-            data: Some(data),
-            ..Default::default()
-        };
-        let result: Result<RuntimeDeploymentRecord, kube::Error> = decode_record(&cm);
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("leaky-cm"),
-            "error should mention ConfigMap name: {msg}"
-        );
-        assert!(
-            msg.contains("record.yaml"),
-            "error should mention record.yaml: {msg}"
-        );
-        assert!(
-            !msg.contains("secret-password"),
-            "error should NOT leak raw scalar value: {msg}"
-        );
+        assert!(value.len() <= 63);
     }
 
     #[test]
