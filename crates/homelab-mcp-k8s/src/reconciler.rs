@@ -4,6 +4,7 @@ use kube::{
     discovery::ApiResource,
 };
 use model_catalog::{DeploymentState, ModelDeployment, ModelDeploymentStatus};
+use tracing::instrument;
 
 /// Determine whether a KServe `Ready=False` condition represents a terminal failure.
 ///
@@ -213,6 +214,7 @@ pub fn dynamic_url(object: &DynamicObject) -> Option<String> {
 /// 4. Computes and patches the deployment status accordingly.
 ///
 /// Per-deployment errors are logged and do **not** abort the loop.
+#[instrument(skip(client))]
 pub async fn reconcile_model_deployments_once(
     client: Client,
     state_namespace: &str,
@@ -320,6 +322,7 @@ pub async fn reconcile_model_deployments_once(
 ///
 /// Errors from each reconciliation pass are logged as warnings; the loop
 /// never panics or exits on transient failures.
+#[instrument(skip(client, interval))]
 pub async fn run_model_deployment_reconciler(
     client: Client,
     state_namespace: String,

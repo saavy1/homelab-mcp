@@ -7,6 +7,7 @@ use kube::{
     api::{DeleteParams, ListParams, LogParams, Patch, PatchParams, PostParams},
     discovery::ApiResource,
 };
+use tracing::instrument;
 
 /// Create a kube::Client from environment (in-cluster or ~/.kube/config).
 pub async fn k8s_client() -> Result<Client, kube::Error> {
@@ -14,6 +15,7 @@ pub async fn k8s_client() -> Result<Client, kube::Error> {
 }
 
 /// Create a download Job on the cluster. Returns the job name.
+#[instrument(skip(job), fields(namespace = %namespace, job_name = ?job.metadata.name))]
 pub async fn create_download_job(
     job: &batchv1::Job,
     namespace: &str,
@@ -25,6 +27,7 @@ pub async fn create_download_job(
 }
 
 /// Check the status of a download Job by name.
+#[instrument(fields(job_name = %job_ref.job_name, namespace = %job_ref.namespace, model_id = %job_ref.model_id))]
 pub async fn get_download_status(job_ref: &DownloadJobRef) -> Result<DownloadStatus, kube::Error> {
     let client = k8s_client().await?;
     let jobs: Api<batchv1::Job> = Api::namespaced(client, &job_ref.namespace);
@@ -85,6 +88,7 @@ fn isvc_api_resource() -> ApiResource {
 }
 
 /// Create an InferenceService (create-only). Returns the resource name.
+#[instrument(skip(manifest), fields(namespace = %namespace, name = ?manifest.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str())))]
 pub async fn create_inferenceservice(
     manifest: serde_json::Value,
     namespace: &str,
@@ -104,6 +108,7 @@ pub async fn create_inferenceservice(
 }
 
 /// Apply (upsert) an InferenceService using server-side apply. Returns the resource name.
+#[instrument(skip(manifest), fields(namespace = %namespace, name = ?manifest.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str())))]
 pub async fn apply_inferenceservice(
     manifest: serde_json::Value,
     namespace: &str,
@@ -125,6 +130,7 @@ pub async fn apply_inferenceservice(
 }
 
 /// Dry-run apply an InferenceService. Returns the resource name.
+#[instrument(skip(manifest), fields(namespace = %namespace, name = ?manifest.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str())))]
 pub async fn dry_run_apply_inferenceservice(
     manifest: serde_json::Value,
     namespace: &str,
@@ -149,6 +155,7 @@ pub async fn dry_run_apply_inferenceservice(
 }
 
 /// Delete an InferenceService by name. Idempotent: returns Ok if 404.
+#[instrument(fields(namespace = %namespace, name = %name))]
 pub async fn delete_inferenceservice(namespace: &str, name: &str) -> Result<(), kube::Error> {
     let ar = isvc_api_resource();
     let client = k8s_client().await?;
@@ -161,6 +168,7 @@ pub async fn delete_inferenceservice(namespace: &str, name: &str) -> Result<(), 
 }
 
 /// Dry-run create an InferenceService. Returns the resource name.
+#[instrument(skip(manifest), fields(namespace = %namespace, name = ?manifest.get("metadata").and_then(|m| m.get("name")).and_then(|n| n.as_str())))]
 pub async fn dry_run_inferenceservice(
     manifest: serde_json::Value,
     namespace: &str,
@@ -185,6 +193,7 @@ pub async fn dry_run_inferenceservice(
 }
 
 /// Get InferenceService status by name.
+#[instrument(fields(namespace = %namespace, name = %name))]
 pub async fn get_inferenceservice_status(
     namespace: &str,
     name: &str,
@@ -249,6 +258,7 @@ pub async fn get_events(namespace: &str, name: &str) -> Result<Vec<String>, kube
 }
 
 /// Get logs from the predictor pod for an InferenceService.
+#[instrument(fields(namespace = %namespace, name = %name, tail = %tail))]
 pub async fn get_predictor_logs(
     namespace: &str,
     name: &str,

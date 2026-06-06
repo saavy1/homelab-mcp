@@ -454,6 +454,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Plan, dry-run, apply, and record a model deployment")]
+    #[instrument(skip(self, params), err, fields(tool.name = "deploy_model", recipe_id = %params.recipe_id, target = %params.target, name = ?params.name, namespace = ?params.namespace))]
     pub async fn deploy_model(
         &self,
         Parameters(params): Parameters<DeployModelParams>,
@@ -478,13 +479,16 @@ impl ModelCatalogTools {
             return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
         }
         let plan = result.data;
+        info!(recipe_id = %params.recipe_id, target = %params.target, plan_digest = %plan.plan_digest, "deploy_model planned");
         let manifest = model_catalog::render_kserve_value(&plan);
         dry_run_apply_inferenceservice(manifest.clone(), &plan.namespace)
             .await
             .map_err(|error| format!("dry-run InferenceService: {error}"))?;
+        info!(namespace = %plan.namespace, name = %plan.name, "deploy_model dry-run ok");
         let created = apply_inferenceservice(manifest, &plan.namespace)
             .await
             .map_err(|error| format!("apply InferenceService: {error}"))?;
+        info!(namespace = %plan.namespace, name = %plan.name, created_name = %created, "deploy_model applied");
         let now = chrono::Utc::now().to_rfc3339();
         let record = model_catalog::RuntimeDeploymentRecord {
             name: plan.name.clone(),
@@ -519,6 +523,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Stop a model deployment by deleting its KServe InferenceService")]
+    #[instrument(skip(self, params), err, fields(tool.name = "stop_model", name = %params.name, namespace = %params.namespace))]
     pub async fn stop_model(
         &self,
         Parameters(params): Parameters<StopModelParams>,
@@ -526,6 +531,7 @@ impl ModelCatalogTools {
         delete_inferenceservice(&params.namespace, &params.name)
             .await
             .map_err(|error| error.to_string())?;
+        info!(namespace = %params.namespace, name = %params.name, "stop_model deleted InferenceService");
 
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let status = model_catalog::ModelDeploymentStatus {
@@ -560,6 +566,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "List runtime model deployments recorded by model-catalog")]
+    #[instrument(skip(self, params), err, fields(tool.name = "list_deployments", target = ?params.target))]
     pub async fn list_deployments(
         &self,
         Parameters(params): Parameters<ListDeploymentsParams>,
@@ -570,9 +577,10 @@ impl ModelCatalogTools {
         let mut deployments = list_runtime_deployments(client, &self.runtime_state_namespace)
             .await
             .map_err(|error| error.to_string())?;
-        if let Some(target) = params.target {
-            deployments.retain(|deployment| deployment.target == target);
+        if let Some(ref target) = params.target {
+            deployments.retain(|deployment| deployment.target == *target);
         }
+        info!(target = ?params.target, count = deployments.len(), "list_deployments");
         serde_json::to_string(&homelab_mcp_core::ToolResult::read(
             format!("listed {} runtime deployment(s)", deployments.len()),
             deployments,
@@ -581,6 +589,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Search Spark Arena model recipes available to import")]
+    #[instrument(skip(self, params), err, fields(tool.name = "search_spark_arena_recipes", query = ?params.query))]
     pub fn search_spark_arena_recipes(
         &self,
         Parameters(params): Parameters<SearchSparkArenaRecipesParams>,
@@ -596,6 +605,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Show one Spark Arena recipe by id before importing")]
+    #[instrument(skip(self, params), err, fields(tool.name = "show_spark_arena_recipe", recipe_id = %params.id))]
     pub fn show_spark_arena_recipe(
         &self,
         Parameters(params): Parameters<ShowSparkArenaRecipeParams>,
@@ -614,6 +624,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Import a Spark Arena recipe into runtime model state")]
+    #[instrument(skip(self, params), err, fields(tool.name = "import_spark_arena_recipe", recipe_id = %params.id))]
     pub async fn import_spark_arena_recipe(
         &self,
         Parameters(params): Parameters<ImportSparkArenaRecipeParams>,
@@ -637,6 +648,7 @@ impl ModelCatalogTools {
         let name = upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
             .await
             .map_err(|error| error.to_string())?;
+        info!(recipe_id = %record.recipe.id, resource = %name, "import_spark_arena_recipe");
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("imported runtime recipe {}", record.recipe.id),
             serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
@@ -645,6 +657,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Create or replace a runtime recipe in model-catalog state")]
+    #[instrument(skip(self, params), err, fields(tool.name = "create_recipe", recipe_id = %params.recipe.id))]
     pub async fn create_recipe(
         &self,
         Parameters(params): Parameters<CreateRecipeParams>,
@@ -662,6 +675,7 @@ impl ModelCatalogTools {
         let name = upsert_runtime_recipe(client, &self.runtime_state_namespace, &record)
             .await
             .map_err(|error| error.to_string())?;
+        info!(recipe_id = %record.recipe.id, resource = %name, "create_recipe");
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("stored runtime recipe {}", record.recipe.id),
             serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
@@ -670,6 +684,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Delete a runtime recipe from model-catalog state")]
+    #[instrument(skip(self, params), err, fields(tool.name = "delete_recipe", recipe_id = %params.recipe_id))]
     pub async fn delete_recipe(
         &self,
         Parameters(params): Parameters<DeleteRecipeParams>,
@@ -680,6 +695,7 @@ impl ModelCatalogTools {
         delete_runtime_recipe(client, &self.runtime_state_namespace, &params.recipe_id)
             .await
             .map_err(|error| error.to_string())?;
+        info!(recipe_id = %params.recipe_id, "delete_recipe");
         serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
             format!("deleted runtime recipe {}", params.recipe_id),
             serde_json::json!({ "recipe_id": params.recipe_id }),
@@ -688,6 +704,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Return capacity report for a model-serving target")]
+    #[instrument(skip(self, params), err, fields(tool.name = "capacity_report", target = %params.target))]
     pub async fn capacity_report(
         &self,
         Parameters(params): Parameters<CapacityReportParams>,
@@ -699,6 +716,7 @@ impl ModelCatalogTools {
             collect_capacity_report(client, &params.target, self.prometheus_base_url.as_deref())
                 .await
                 .map_err(|error| error.to_string())?;
+        info!(target = %params.target, active_models = report.active_models.len(), "capacity_report");
         serde_json::to_string(&homelab_mcp_core::ToolResult::read(
             format!("capacity report for {}", params.target),
             report,
@@ -707,6 +725,7 @@ impl ModelCatalogTools {
     }
 
     #[tool(description = "Estimate whether a recipe fits on a target using current capacity")]
+    #[instrument(skip(self, params), err, fields(tool.name = "estimate_fit", recipe_id = %params.recipe_id, target = %params.target))]
     pub async fn estimate_fit(
         &self,
         Parameters(params): Parameters<EstimateFitParams>,
@@ -748,6 +767,7 @@ impl ModelCatalogTools {
             requested,
             recipe.hardware.estimated_vram_gb,
         );
+        info!(recipe_id = %params.recipe_id, target = %params.target, fits = ?estimate.fits, "estimate_fit");
         serde_json::to_string(&homelab_mcp_core::ToolResult::read(
             format!("fit estimate for {} on {}", params.recipe_id, params.target),
             estimate,

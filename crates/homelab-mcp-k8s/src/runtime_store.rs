@@ -10,6 +10,7 @@ use model_catalog::{
     RuntimeRecipeRecord, deployment_parts_to_record, deployment_record_to_spec,
     deployment_record_to_status, recipe_record_to_spec, recipe_spec_to_record,
 };
+use tracing::instrument;
 
 fn runtime_name(prefix: &str, id: &str) -> String {
     format!("{}-{}", prefix, homelab_mcp_core::sanitize_dns_name(id))
@@ -103,6 +104,7 @@ fn bounded_label_value(s: &str) -> String {
     }
 }
 
+#[instrument(skip(client, record), fields(namespace = %namespace, recipe_id = %record.recipe.id))]
 pub async fn upsert_runtime_recipe(
     client: Client,
     namespace: &str,
@@ -133,6 +135,7 @@ pub async fn upsert_runtime_recipe(
     Ok(applied.metadata.name.unwrap_or(name))
 }
 
+#[instrument(skip(client), fields(namespace = %namespace))]
 pub async fn list_runtime_recipes(
     client: Client,
     namespace: &str,
@@ -147,6 +150,7 @@ pub async fn list_runtime_recipes(
         .collect())
 }
 
+#[instrument(skip(client), fields(namespace = %namespace, recipe_id = %recipe_id))]
 pub async fn get_runtime_recipe(
     client: Client,
     namespace: &str,
@@ -160,6 +164,7 @@ pub async fn get_runtime_recipe(
     }
 }
 
+#[instrument(skip(client), fields(namespace = %namespace, recipe_id = %recipe_id))]
 pub async fn delete_runtime_recipe(
     client: Client,
     namespace: &str,
@@ -174,6 +179,7 @@ pub async fn delete_runtime_recipe(
     }
 }
 
+#[instrument(skip(client, record), fields(namespace = %namespace, deployment_name = %record.name, target = %record.target))]
 pub async fn upsert_runtime_deployment(
     client: Client,
     namespace: &str,
@@ -216,6 +222,7 @@ pub async fn upsert_runtime_deployment(
     Ok(result)
 }
 
+#[instrument(skip(client), fields(namespace = %namespace))]
 pub async fn list_runtime_deployments(
     client: Client,
     namespace: &str,
@@ -230,6 +237,7 @@ pub async fn list_runtime_deployments(
         .collect())
 }
 
+#[instrument(skip(client), fields(namespace = %namespace, name = %name))]
 pub async fn get_runtime_deployment(
     client: Client,
     namespace: &str,
@@ -246,6 +254,7 @@ pub async fn get_runtime_deployment(
     }
 }
 
+#[instrument(skip(client, status), fields(namespace = %namespace, name = %name, state = ?status.state))]
 pub async fn update_runtime_deployment_status(
     client: Client,
     namespace: &str,

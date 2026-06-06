@@ -118,11 +118,90 @@ pub fn sanitize_dns_name(s: &str) -> String {
 }
 
 pub fn init_tracing() {
+    init_tracing_with_service("homelab-mcp");
+}
+
+pub fn init_tracing_with_service(fallback_service_name: &str) {
+    use std::env;
+
+    let service_name =
+        env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| fallback_service_name.to_string());
+
+    if let Ok(endpoint) = env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        && !endpoint.is_empty()
+    {
+        match try_init_otel(&service_name, &endpoint) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!(
+                    "OTLP tracer initialization failed, continuing with JSON logs only: {e}"
+                );
+            }
+        }
+    }
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .json()
         .with_target(true)
         .try_init();
+}
+
+fn try_init_otel(service_name: &str, endpoint: &str) -> Result<(), String> {
+    use opentelemetry::trace::TracerProvider;
+    use opentelemetry_otlp::WithExportConfig;
+    use std::env;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+    use tracing_subscriber::{EnvFilter, Layer};
+
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|e| format!("failed to build OTLP span exporter: {e}"))?;
+
+    let mut resource_attrs = vec![opentelemetry::KeyValue::new(
+        "service.name",
+        service_name.to_string(),
+    )];
+
+    if let Ok(extra) = env::var("OTEL_RESOURCE_ATTRIBUTES") {
+        for pair in extra.split(',') {
+            if let Some((k, v)) = pair.split_once('=') {
+                resource_attrs.push(opentelemetry::KeyValue::new(
+                    k.trim().to_string(),
+                    v.trim().to_string(),
+                ));
+            }
+        }
+    }
+
+    let resource = opentelemetry_sdk::Resource::builder_empty()
+        .with_attributes(resource_attrs)
+        .build();
+
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .with_resource(resource)
+        .build();
+
+    opentelemetry::global::set_tracer_provider(provider.clone());
+
+    let tracer = provider.tracer("homelab-mcp");
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .json()
+        .with_target(true)
+        .with_filter(EnvFilter::from_default_env());
+
+    let _ = tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(otel_layer)
+        .try_init();
+
+    Ok(())
 }
 
 #[cfg(test)]
