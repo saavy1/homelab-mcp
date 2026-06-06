@@ -160,8 +160,14 @@ mod tests {
 
     #[test]
     fn sanitize_label_value_replaces_slashes() {
-        assert_eq!(sanitize_label_value("LiquidAI/LFM2.5-350M"), "liquidai-lfm2.5-350m");
-        assert_eq!(sanitize_label_value("deepseek-ai/DeepSeek-V4-Flash"), "deepseek-ai-deepseek-v4-flash");
+        assert_eq!(
+            sanitize_label_value("LiquidAI/LFM2.5-350M"),
+            "liquidai-lfm2.5-350m"
+        );
+        assert_eq!(
+            sanitize_label_value("deepseek-ai/DeepSeek-V4-Flash"),
+            "deepseek-ai-deepseek-v4-flash"
+        );
         assert_eq!(sanitize_label_value("no-slashes"), "no-slashes");
     }
 
