@@ -47,6 +47,10 @@ pub struct PlanDeployParams {
     pub memory: Option<String>,
     pub gpu_count: Option<u32>,
     pub readiness_timeout_seconds: Option<u32>,
+    /// Override the runtime engine. Defaults to the recipe's engine. Use "sglang" for SGLang.
+    pub engine: Option<model_catalog::RuntimeEngine>,
+    /// Override the runtime port. Defaults to 8080 for vllm, 8000 for sglang.
+    pub port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
@@ -62,6 +66,10 @@ pub struct EnsureWeightsParams {
     pub memory: Option<String>,
     pub gpu_count: Option<u32>,
     pub readiness_timeout_seconds: Option<u32>,
+    /// Override the runtime engine. Defaults to the recipe's engine. Use "sglang" for SGLang.
+    pub engine: Option<model_catalog::RuntimeEngine>,
+    /// Override the runtime port. Defaults to 8080 for vllm, 8000 for sglang.
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -82,6 +90,10 @@ pub struct ApplyPlanParams {
     pub memory: Option<String>,
     pub gpu_count: Option<u32>,
     pub readiness_timeout_seconds: Option<u32>,
+    /// Override the runtime engine. Defaults to the recipe's engine. Use "sglang" for SGLang.
+    pub engine: Option<model_catalog::RuntimeEngine>,
+    /// Override the runtime port. Defaults to 8080 for vllm, 8000 for sglang.
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -109,6 +121,12 @@ pub struct DeployModelParams {
     pub memory: Option<String>,
     pub gpu_count: Option<u32>,
     pub readiness_timeout_seconds: Option<u32>,
+    /// Override the runtime engine for this deployment. Defaults to the recipe's engine.
+    /// Use "sglang" for SGLang-based serving. This overrides the recipe's runtime.engine.
+    pub engine: Option<model_catalog::RuntimeEngine>,
+    /// Override the runtime port for this deployment. Defaults to 8080 for vllm, 8000 for sglang.
+    /// This overrides the recipe's runtime.port.
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -141,6 +159,12 @@ pub struct ImportSparkArenaRecipeParams {
 #[derive(Clone, Debug, Deserialize, schemars::JsonSchema)]
 pub struct CreateRecipeParams {
     pub recipe: Recipe,
+    /// Override the runtime engine for this recipe. Defaults to "vllm" if not set.
+    /// Use "sglang" for SGLang-based serving. This overrides recipe.runtime.engine.
+    pub engine: Option<model_catalog::RuntimeEngine>,
+    /// Override the runtime port for this recipe. Defaults to 8080 for vllm, 8000 for sglang.
+    /// This overrides recipe.runtime.port.
+    pub port: Option<u16>,
     pub created_by: Option<String>,
 }
 
@@ -237,7 +261,13 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<PlanDeployParams>,
     ) -> Result<String, String> {
-        let recipe = self.find_recipe(&params.recipe_id).await?;
+        let mut recipe = self.find_recipe(&params.recipe_id).await?;
+        if let Some(engine) = params.engine {
+            recipe.runtime.engine = engine;
+        }
+        if let Some(port) = params.port {
+            recipe.runtime.port = Some(port);
+        }
         let result = plan_deploy(
             &recipe,
             &self.cluster_profile,
@@ -268,8 +298,10 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<EnsureWeightsParams>,
     ) -> Result<String, String> {
+        let engine = params.engine.clone();
+        let port = params.port;
         let plan = self
-            .derive_plan(
+            .derive_plan_with_overrides(
                 &params.recipe_id,
                 DeployOverrides {
                     name: params.name,
@@ -285,6 +317,8 @@ impl ModelCatalogTools {
                     ),
                     readiness_timeout_seconds: params.readiness_timeout_seconds,
                 },
+                engine,
+                port,
             )
             .await?;
         verify_digest(&plan, &params.plan_digest)?;
@@ -366,8 +400,10 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<ApplyPlanParams>,
     ) -> Result<String, String> {
+        let engine = params.engine.clone();
+        let port = params.port;
         let plan = self
-            .derive_plan(
+            .derive_plan_with_overrides(
                 &params.recipe_id,
                 DeployOverrides {
                     name: params.name,
@@ -383,6 +419,8 @@ impl ModelCatalogTools {
                     ),
                     readiness_timeout_seconds: params.readiness_timeout_seconds,
                 },
+                engine,
+                port,
             )
             .await?;
         verify_digest(&plan, &params.plan_digest)?;
@@ -459,7 +497,13 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<DeployModelParams>,
     ) -> Result<String, String> {
-        let recipe = self.find_recipe(&params.recipe_id).await?;
+        let mut recipe = self.find_recipe(&params.recipe_id).await?;
+        if let Some(engine) = params.engine {
+            recipe.runtime.engine = engine;
+        }
+        if let Some(port) = params.port {
+            recipe.runtime.port = Some(port);
+        }
         let overrides = DeployOverrides {
             name: params.name.clone(),
             namespace: params.namespace.clone(),
@@ -664,9 +708,16 @@ impl ModelCatalogTools {
         &self,
         Parameters(params): Parameters<CreateRecipeParams>,
     ) -> Result<String, String> {
+        let mut recipe = params.recipe;
+        if let Some(engine) = params.engine {
+            recipe.runtime.engine = engine;
+        }
+        if let Some(port) = params.port {
+            recipe.runtime.port = Some(port);
+        }
         let now = chrono::Utc::now().to_rfc3339();
         let record = RuntimeRecipeRecord {
-            recipe: params.recipe,
+            recipe,
             created_by: params.created_by.unwrap_or_else(|| "hermes".into()),
             created_at: now.clone(),
             updated_at: now,
@@ -779,12 +830,20 @@ impl ModelCatalogTools {
 }
 
 impl ModelCatalogTools {
-    async fn derive_plan(
+    async fn derive_plan_with_overrides(
         &self,
         recipe_id: &str,
         overrides: DeployOverrides,
+        engine: Option<model_catalog::RuntimeEngine>,
+        port: Option<u16>,
     ) -> Result<DeploymentPlan, String> {
-        let recipe = self.find_recipe(recipe_id).await?;
+        let mut recipe = self.find_recipe(recipe_id).await?;
+        if let Some(engine) = engine {
+            recipe.runtime.engine = engine;
+        }
+        if let Some(port) = port {
+            recipe.runtime.port = Some(port);
+        }
         let result = plan_deploy(&recipe, &self.cluster_profile, overrides);
         if !result.issues.is_empty() {
             return Err(serde_json::to_string(&result.issues).map_err(|error| error.to_string())?);
@@ -873,6 +932,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await
             .expect("plan");
@@ -894,6 +955,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await
             .expect("plan");
@@ -915,6 +978,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await;
         // Without a cluster the kube API call fails, but it must NOT be a digest error
@@ -941,6 +1006,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await
             .expect("plan");
@@ -958,6 +1025,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await;
         let err = result.expect_err("should reject wrong digest");
@@ -981,6 +1050,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await
             .expect("plan");
@@ -998,6 +1069,8 @@ mod tests {
                 memory: None,
                 gpu_count: None,
                 readiness_timeout_seconds: None,
+                engine: None,
+                port: None,
             }))
             .await;
         assert!(result.is_err());
@@ -1022,6 +1095,8 @@ mod tests {
             memory: Some("32Gi".into()),
             gpu_count: Some(1),
             readiness_timeout_seconds: Some(120),
+            engine: None,
+            port: None,
         }
     }
 
@@ -1041,6 +1116,8 @@ mod tests {
             memory: params.memory.clone(),
             gpu_count: params.gpu_count,
             readiness_timeout_seconds: params.readiness_timeout_seconds,
+            engine: params.engine.clone(),
+            port: params.port,
         }
     }
 
@@ -1060,6 +1137,8 @@ mod tests {
             memory: params.memory.clone(),
             gpu_count: params.gpu_count,
             readiness_timeout_seconds: params.readiness_timeout_seconds,
+            engine: params.engine.clone(),
+            port: params.port,
         }
     }
 
