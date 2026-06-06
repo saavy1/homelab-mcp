@@ -110,6 +110,9 @@ pub fn inferenceservice_api(client: Client, namespace: &str) -> Api<DynamicObjec
 
 /// Parse `status.conditions` from a dynamic InferenceService object.
 pub fn dynamic_conditions(object: &DynamicObject) -> Vec<Condition> {
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::Time;
+    use k8s_openapi::jiff::Timestamp;
+
     object
         .data
         .get("status")
@@ -117,7 +120,33 @@ pub fn dynamic_conditions(object: &DynamicObject) -> Vec<Condition> {
         .and_then(|c| c.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|c| serde_json::from_value(c.clone()).ok())
+                .filter_map(|c| {
+                    let type_ = c.get("type")?.as_str()?.to_string();
+                    let status = c.get("status")?.as_str()?.to_string();
+                    let reason = c
+                        .get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let message = c
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let last_transition_time = c
+                        .get("lastTransitionTime")
+                        .and_then(|lt| serde_json::from_value(lt.clone()).ok())
+                        .unwrap_or_else(|| Time(Timestamp::from_second(0).unwrap()));
+
+                    Some(Condition {
+                        last_transition_time,
+                        message,
+                        observed_generation: None,
+                        reason,
+                        status,
+                        type_,
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -448,5 +477,39 @@ mod tests {
         let conditions = dynamic_conditions(&obj);
         assert!(conditions.is_empty());
         assert_eq!(dynamic_url(&obj), None);
+    }
+
+    #[test]
+    fn dynamic_parsing_handles_sparse_kserve_conditions() {
+        let ar = ApiResource {
+            group: "serving.kserve.io".into(),
+            version: "v1beta1".into(),
+            kind: "InferenceService".into(),
+            api_version: "serving.kserve.io/v1beta1".into(),
+            plural: "inferenceservices".into(),
+        };
+        let mut obj = DynamicObject::new("my-model", &ar);
+        obj.data = serde_json::json!({
+            "status": {
+                "conditions": [
+                    {
+                        "type": "Ready",
+                        "status": "True",
+                        "lastTransitionTime": "2024-01-01T00:00:00Z"
+                    }
+                ]
+            }
+        });
+
+        let conditions = dynamic_conditions(&obj);
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0].type_, "Ready");
+        assert_eq!(conditions[0].status, "True");
+        assert_eq!(conditions[0].reason, "");
+        assert_eq!(conditions[0].message, "");
+
+        let status = status_from_kserve_conditions(None, Some(1), conditions, None);
+        assert_eq!(status.state, DeploymentState::Ready);
+        assert!(status.kserve_ready);
     }
 }
