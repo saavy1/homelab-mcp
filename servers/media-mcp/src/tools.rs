@@ -1,8 +1,18 @@
+use crate::config::MediaConfig;
 use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
 use serde::Deserialize;
 
 #[derive(Clone)]
-pub struct MediaTools {}
+pub struct MediaTools {
+    config: MediaConfig,
+    http: reqwest::Client,
+}
+
+impl MediaTools {
+    pub fn new(config: MediaConfig, http: reqwest::Client) -> Self {
+        Self { config, http }
+    }
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HealthParams {}

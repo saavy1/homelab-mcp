@@ -1,3 +1,7 @@
+mod config;
+mod error;
+mod models;
+mod observability;
 mod tools;
 
 use anyhow::Result;
@@ -35,7 +39,17 @@ async fn main() -> Result<()> {
             "media-mcp.hermes.svc.cluster.local".to_string(),
         ]);
     let session_manager = Arc::new(LocalSessionManager::default());
-    let service = StreamableHttpService::new(|| Ok(MediaTools {}), session_manager, config);
+    let media_config = config::MediaConfig::from_env()?;
+    let service = StreamableHttpService::new(
+        move || {
+            Ok(MediaTools::new(
+                media_config.clone(),
+                reqwest::Client::new(),
+            ))
+        },
+        session_manager,
+        config,
+    );
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
