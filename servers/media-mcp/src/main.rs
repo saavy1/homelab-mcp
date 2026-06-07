@@ -35,11 +35,7 @@ async fn main() -> Result<()> {
             "media-mcp.hermes.svc.cluster.local".to_string(),
         ]);
     let session_manager = Arc::new(LocalSessionManager::default());
-    let service = StreamableHttpService::new(
-        || Ok(MediaTools {}),
-        session_manager,
-        config,
-    );
+    let service = StreamableHttpService::new(|| Ok(MediaTools {}), session_manager, config);
 
     let app = axum::Router::new()
         .route("/health", axum::routing::get(|| async { "ok" }))
