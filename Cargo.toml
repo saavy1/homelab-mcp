@@ -5,6 +5,7 @@ members = [
   "crates/homelab-mcp-k8s",
   "crates/model-catalog",
   "servers/model-catalog-mcp",
+  "servers/media-mcp",
 ]
 
 [workspace.package]
