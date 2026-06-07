@@ -21,7 +21,7 @@ Add a new Rust server at `homelab-mcp/servers/media-mcp`. It will follow the exi
 - streamable HTTP MCP transport
 - `/health` endpoint
 - JSON responses
-- structured tracing
+- structured logs, tool-call logs, and OpenTelemetry traces
 - Docker image published to GHCR
 - Kubernetes `Deployment` and `Service` in `sb`
 
@@ -75,10 +75,28 @@ Do not expose generic raw HTTP proxy tools in the first version. If an unsupport
 ## Data Flow
 
 1. Hermes calls a high-level MCP tool.
-2. `media-mcp` validates parameters and resolves the relevant service client.
-3. The client calls the upstream service API using credentials from `media-mcp-env`.
-4. `media-mcp` normalizes successful responses into predictable JSON while preserving source-specific details under a service-specific field.
-5. Upstream failures are mapped to structured MCP errors.
+2. `media-mcp` starts a tracing span for the tool call and logs a structured `tool_call_started` event with the tool name, request id, and non-secret identifiers.
+3. `media-mcp` validates parameters and resolves the relevant service client.
+4. The client calls the upstream service API using credentials from `media-mcp-env`, with child spans for upstream calls.
+5. `media-mcp` normalizes successful responses into predictable JSON while preserving source-specific details under a service-specific field.
+6. `media-mcp` logs `tool_call_completed` or `tool_call_failed` with latency, upstream service, operation, status, retryability, and affected item ids where applicable.
+7. Upstream failures are mapped to structured MCP errors.
+
+## Observability
+
+Observability is a first-class requirement because failures should be diagnosable from Grafana.
+
+The server should emit:
+
+- structured JSON logs through the existing tracing initialization style used by `model-catalog-mcp`
+- one span per MCP tool call
+- one child span per upstream Jellyseerr, SABnzbd, or Jellyfin HTTP call
+- tool-call lifecycle events: started, completed, failed
+- fields for `tool`, `request_id`, `service`, `operation`, `latency_ms`, `status`, `retryable`, and stable media/download/request ids when present
+
+The Kubernetes deployment should set OpenTelemetry environment variables so traces flow to the existing Alloy OTLP endpoint used by `model-catalog-mcp`.
+
+Logs and spans must not include API keys, tokens, Authorization headers, or full credential-bearing URLs.
 
 ## Error Handling
 
@@ -120,6 +138,20 @@ Add an ArgoCD app under `sb/argocd/clusters/superbloom/infra/media-mcp/` with re
 
 The deployment should use a non-root security context, read-only root filesystem, dropped capabilities, liveness/readiness probes on `/health`, and labels tying it to Hermes.
 
+## Image Build Workflow
+
+Add a dedicated GitHub Actions workflow for `media-mcp`, modeled after `.github/workflows/build-model-mcp.yml`.
+
+The workflow should:
+
+- build from the workspace root
+- publish `ghcr.io/saavy1/media-mcp`
+- tag `latest`, commit SHA, and branch refs
+- trigger on changes to Rust crates, servers, `Cargo.*`, `Dockerfile`, or the workflow file
+- keep the model-catalog workflow separate until the model-catalog MCP is removed
+
+After `media-mcp` is implemented and deployed, the existing model-catalog MCP can be removed in a separate cleanup commit, including its server crate, workflow, and GitOps manifests.
+
 ## Testing
 
 Unit and integration tests should cover:
@@ -128,6 +160,7 @@ Unit and integration tests should cover:
 - response normalization
 - upstream HTTP success/failure mapping
 - secret redaction in error/log paths where practical
+- structured tool-call log fields and tracing span fields
 - each write tool’s required identifier behavior
 
 Use mock HTTP servers for Jellyseerr, SABnzbd, and Jellyfin instead of calling live services in automated tests.
@@ -148,6 +181,7 @@ For GitOps manifests, validate with the repository’s existing YAML/Kustomize c
 - Ingress or public exposure for `media-mcp`
 - A Hermes skill for media workflows
 - Automatic credential creation or SOPS encryption
+- Removing `model-catalog-mcp` before `media-mcp` is implemented and deployed
 
 ## Open Decisions Resolved
 
