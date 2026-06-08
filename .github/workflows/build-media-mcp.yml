@@ -7,7 +7,8 @@ on:
       - "crates/**"
       - "servers/**"
       - "Cargo.*"
-      - "Dockerfile"
+      - ".dockerignore"
+      - "servers/media-mcp/Dockerfile"
       - ".github/workflows/build-media-mcp.yml"
   workflow_dispatch:
 
@@ -50,10 +51,8 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: servers/media-mcp/Dockerfile
           platforms: linux/amd64
-          build-args: |
-            PACKAGE=media-mcp
-            BINARY=media-mcp
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
