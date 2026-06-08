@@ -48,9 +48,12 @@ async fn list_requests_normalizes_paginated_results() {
                 "results": [{
                     "id": 42,
                     "mediaId": 101,
-                    "mediaType": "movie",
                     "status": 1,
-                    "title": "Inception"
+                    "title": "Inception",
+                    "media": {
+                        "mediaType": "movie",
+                        "tmdbId": 101
+                    }
                 }]
             }))
         }),

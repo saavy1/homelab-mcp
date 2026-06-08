@@ -339,6 +339,13 @@ fn normalize_request(value: &Value) -> MediaRequest {
     let media_type = value
         .get("mediaType")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("media")
+                .and_then(|m| m.get("mediaType"))
+                .and_then(|v| v.as_str())
+        })
+        .or_else(|| value.get("type").and_then(|v| v.as_str()))
         .unwrap_or("unknown")
         .to_string();
 
