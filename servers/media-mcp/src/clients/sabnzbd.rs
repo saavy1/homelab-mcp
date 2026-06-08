@@ -98,18 +98,22 @@ impl SabnzbdClient {
                     ("del_files", del_files),
                 ],
             )
-            .await;
+            .await?;
 
-        match queue_body {
-            Ok(body) => {
-                if self
-                    .validate_action_response("delete_download", nzo_id, &body)
-                    .is_ok()
-                {
-                    return Ok(self.operation_result("delete_download", nzo_id, body));
-                }
-            }
-            Err(e) => return Err(e),
+        if self
+            .validate_action_response("delete_download", nzo_id, &queue_body)
+            .is_ok()
+        {
+            return Ok(self.operation_result("delete_download", nzo_id, queue_body));
+        }
+
+        // Only fall back to history when the queue response is a valid
+        // action response shape that does not contain the requested id.
+        if !self.is_valid_empty_action_response(&queue_body, nzo_id) {
+            return match self.validate_action_response("delete_download", nzo_id, &queue_body) {
+                Ok(()) => unreachable!(),
+                Err(e) => Err(e),
+            };
         }
 
         // Queue did not affect the requested id; try history delete.
@@ -268,6 +272,23 @@ impl SabnzbdClient {
         }
 
         Ok(())
+    }
+
+    /// Returns true when the response is a valid action response shape
+    /// that does not contain the requested id (status is not false,
+    /// nzo_ids is present as an array, and the array does not contain nzo_id).
+    fn is_valid_empty_action_response(&self, body: &Value, nzo_id: &str) -> bool {
+        if body.get("status").and_then(|v| v.as_bool()) == Some(false) {
+            return false;
+        }
+
+        let Some(nzo_ids) = body.get("nzo_ids").and_then(|v| v.as_array()) else {
+            return false;
+        };
+
+        !nzo_ids
+            .iter()
+            .any(|v| v.as_str().map(|s| s == nzo_id).unwrap_or(false))
     }
 
     fn operation_result(&self, operation: &str, nzo_id: &str, source: Value) -> OperationResult {

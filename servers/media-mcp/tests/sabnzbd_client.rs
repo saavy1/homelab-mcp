@@ -265,6 +265,88 @@ async fn delete_download_fallback_to_history_when_queue_missing_id() {
 }
 
 #[tokio::test]
+async fn delete_download_queue_false_status_empty_nzo_ids_returns_error_no_history() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&request_count);
+    let app = Router::new().route(
+        "/api",
+        get(
+            move |Query(params): Query<HashMap<String, String>>| async move {
+                let current = count.fetch_add(1, Ordering::SeqCst);
+                match current {
+                    0 => {
+                        assert_eq!(params.get("mode"), Some(&"queue".to_string()));
+                        assert_eq!(params.get("name"), Some(&"delete".to_string()));
+                        common::json_response(json!({ "status": false, "nzo_ids": [] }))
+                    }
+                    _ => panic!(
+                        "unexpected request #{}: expected only queue request",
+                        current
+                    ),
+                }
+            },
+        ),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let err = client.delete_download("nzo_123", false).await.unwrap_err();
+    assert!(
+        err.to_string().contains("upstream error"),
+        "expected upstream error, got: {}",
+        err
+    );
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn delete_download_queue_true_status_missing_nzo_ids_returns_error_no_history() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&request_count);
+    let app = Router::new().route(
+        "/api",
+        get(
+            move |Query(params): Query<HashMap<String, String>>| async move {
+                let current = count.fetch_add(1, Ordering::SeqCst);
+                match current {
+                    0 => {
+                        assert_eq!(params.get("mode"), Some(&"queue".to_string()));
+                        assert_eq!(params.get("name"), Some(&"delete".to_string()));
+                        common::json_response(json!({ "status": true }))
+                    }
+                    _ => panic!(
+                        "unexpected request #{}: expected only queue request",
+                        current
+                    ),
+                }
+            },
+        ),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let err = client.delete_download("nzo_123", false).await.unwrap_err();
+    assert!(
+        err.to_string().contains("upstream error"),
+        "expected upstream error, got: {}",
+        err
+    );
+    assert_eq!(request_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn serialized_error_does_not_contain_apikey_on_upstream_failure() {
     let app = Router::new().route(
         "/api",
