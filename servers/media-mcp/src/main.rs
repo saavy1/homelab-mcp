@@ -1,26 +1,9 @@
-mod config;
-mod error;
-mod models;
-mod observability;
-mod tools;
-
 use anyhow::Result;
-use rmcp::{
-    ServerHandler, tool_handler,
-    transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-    },
+use media_mcp::{config, tools::MediaTools};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use std::{env, net::SocketAddr, sync::Arc};
-use tools::MediaTools;
-
-#[tool_handler(
-    name = "media-mcp",
-    version = "0.1.0",
-    instructions = "Task-oriented media operator for Jellyseerr, SABnzbd, and Jellyfin. \
-        Use high-level tools for media requests, download queue control, and Jellyfin library/session operations."
-)]
-impl ServerHandler for MediaTools {}
 
 #[tokio::main]
 async fn main() -> Result<()> {

@@ -1,5 +1,7 @@
 use crate::config::MediaConfig;
-use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router};
+use rmcp::{
+    ServerHandler, handler::server::wrapper::Parameters, schemars, tool, tool_handler, tool_router,
+};
 use serde::Deserialize;
 
 #[derive(Clone)]
@@ -33,3 +35,11 @@ impl MediaTools {
         .to_string())
     }
 }
+
+#[tool_handler(
+    name = "media-mcp",
+    version = "0.1.0",
+    instructions = "Task-oriented media operator for Jellyseerr, SABnzbd, and Jellyfin. \
+        Use high-level tools for media requests, download queue control, and Jellyfin library/session operations."
+)]
+impl ServerHandler for MediaTools {}
