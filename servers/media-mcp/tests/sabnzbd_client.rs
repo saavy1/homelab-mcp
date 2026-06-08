@@ -151,6 +151,30 @@ async fn action_false_status_empty_nzo_ids_maps_to_error() {
 }
 
 #[tokio::test]
+async fn action_true_status_missing_nzo_ids_maps_to_error() {
+    let app = Router::new().route(
+        "/api",
+        get(|Query(params): Query<HashMap<String, String>>| async move {
+            assert_eq!(params.get("mode"), Some(&"queue".to_string()));
+            assert_eq!(params.get("name"), Some(&"pause".to_string()));
+            common::json_response(json!({ "status": true }))
+        }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let err = client.pause_download("nzo_123").await.unwrap_err();
+    assert!(
+        err.to_string().contains("upstream error"),
+        "expected upstream error, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
 async fn serialized_error_does_not_contain_apikey_on_upstream_failure() {
     let app = Router::new().route(
         "/api",

@@ -203,19 +203,30 @@ impl SabnzbdClient {
             }));
         }
 
-        if let Some(nzo_ids) = body.get("nzo_ids").and_then(|v| v.as_array()) {
-            let found = nzo_ids
-                .iter()
-                .any(|v| v.as_str().map(|s| s == nzo_id).unwrap_or(false));
-            if !found {
-                return Err(MediaMcpError::Upstream(UpstreamError {
+        let nzo_ids = body
+            .get("nzo_ids")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                MediaMcpError::Upstream(UpstreamError {
                     service: "sabnzbd",
                     operation,
                     status: None,
                     retryable: false,
-                    message: format!("nzo_id {} not found in response", nzo_id),
-                }));
-            }
+                    message: "nzo_ids missing or not an array in action response".to_string(),
+                })
+            })?;
+
+        let found = nzo_ids
+            .iter()
+            .any(|v| v.as_str().map(|s| s == nzo_id).unwrap_or(false));
+        if !found {
+            return Err(MediaMcpError::Upstream(UpstreamError {
+                service: "sabnzbd",
+                operation,
+                status: None,
+                retryable: false,
+                message: format!("nzo_id {} not found in response", nzo_id),
+            }));
         }
 
         Ok(())
