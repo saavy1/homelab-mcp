@@ -39,6 +39,39 @@ async fn search_media_normalizes_results() {
 }
 
 #[tokio::test]
+async fn list_requests_normalizes_paginated_results() {
+    let app = Router::new().route(
+        "/api/v1/request",
+        get(|| async {
+            common::json_response(json!({
+                "pageInfo": {"pages": 1, "pageSize": 20},
+                "results": [{
+                    "id": 42,
+                    "mediaId": 101,
+                    "mediaType": "movie",
+                    "status": 1,
+                    "title": "Inception"
+                }]
+            }))
+        }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = JellyseerrClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("jellyseerr", base_url, "key").unwrap(),
+    );
+
+    let results = client.list_requests(None).await.unwrap();
+
+    assert!(!results.is_empty());
+    assert_eq!(results[0].id, "42");
+    assert_eq!(results[0].media_id, "101");
+    assert_eq!(results[0].media_type, "movie");
+    assert_eq!(results[0].status, "1");
+    assert_eq!(results[0].title.as_deref(), Some("Inception"));
+}
+
+#[tokio::test]
 async fn approve_request_returns_affected_request_id() {
     let app = Router::new().route(
         "/api/v1/request/{id}/approve",

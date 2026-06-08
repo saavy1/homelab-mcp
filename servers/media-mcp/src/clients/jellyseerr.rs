@@ -133,7 +133,9 @@ impl JellyseerrClient {
 
             let body: Value = response.json().await?;
             let results = body
-                .as_array()
+                .get("results")
+                .and_then(|r| r.as_array())
+                .or_else(|| body.as_array())
                 .map(|arr| arr.iter().map(normalize_request).collect::<Vec<_>>())
                 .unwrap_or_default();
 
