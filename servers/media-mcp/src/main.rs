@@ -14,13 +14,7 @@ async fn main() -> Result<()> {
     let config = StreamableHttpServerConfig::default()
         .with_stateful_mode(false)
         .with_json_response(true)
-        .with_allowed_hosts(vec![
-            "localhost".to_string(),
-            "127.0.0.1".to_string(),
-            "::1".to_string(),
-            "0.0.0.0".to_string(),
-            "media-mcp.hermes.svc.cluster.local".to_string(),
-        ]);
+        .with_allowed_hosts(config::mcp_allowed_hosts_from_env());
     let session_manager = Arc::new(LocalSessionManager::default());
     let media_config = config::MediaConfig::from_env()?;
     let service = StreamableHttpService::new(

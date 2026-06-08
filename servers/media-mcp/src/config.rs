@@ -91,6 +91,41 @@ impl MediaConfig {
     }
 }
 
+pub fn default_mcp_allowed_hosts() -> Vec<String> {
+    [
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "media-mcp",
+        "media-mcp:8080",
+        "media-mcp.hermes.svc.cluster.local",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+pub fn parse_mcp_allowed_hosts(extra_hosts: Option<&str>) -> Vec<String> {
+    let mut hosts = default_mcp_allowed_hosts();
+    if let Some(extra_hosts) = extra_hosts {
+        hosts.extend(
+            extra_hosts
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(String::from),
+        );
+    }
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
+pub fn mcp_allowed_hosts_from_env() -> Vec<String> {
+    parse_mcp_allowed_hosts(env::var("MCP_ALLOWED_HOSTS").ok().as_deref())
+}
+
 #[allow(dead_code)]
 pub fn redacted_url(url: &str) -> String {
     let mut redacted = url.to_string();
@@ -123,6 +158,26 @@ mod tests {
         assert_eq!(
             redacted_url("http://sabnzbd.local/api?apikey=secret&mode=queue"),
             "http://sabnzbd.local/api?<redacted>"
+        );
+    }
+
+    #[test]
+    fn mcp_allowed_hosts_include_tailnet_service_name() {
+        let hosts = parse_mcp_allowed_hosts(None);
+        assert!(hosts.contains(&"media-mcp".to_string()));
+    }
+
+    #[test]
+    fn mcp_allowed_hosts_adds_extra_hosts_and_ignores_blanks() {
+        let hosts = parse_mcp_allowed_hosts(Some(
+            "media-mcp.tailnet.ts.net, media-mcp.tailnet.ts.net, ",
+        ));
+        assert_eq!(
+            hosts
+                .iter()
+                .filter(|host| host.as_str() == "media-mcp.tailnet.ts.net")
+                .count(),
+            1
         );
     }
 

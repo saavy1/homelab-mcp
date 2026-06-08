@@ -30,6 +30,7 @@ Set `PORT` to choose the HTTP listener port. It defaults to `8080`.
 
 | Variable | Default |
 |----------|---------|
+| `MCP_ALLOWED_HOSTS` | Optional comma-separated additions to the built-in allowed hosts |
 | `JELLYSEERR_BASE_URL` | `http://jellyseerr.jellyseerr.svc.cluster.local:5055` |
 | `JELLYSEERR_API_KEY` | Required |
 | `SABNZBD_BASE_URL` | `http://sabnzbd.sabnzbd.svc.cluster.local:8080` |
