@@ -105,7 +105,8 @@ impl JellyfinClient {
             .get(&url)
             .header("X-Emby-Token", &self.config.api_key)
             .send()
-            .await?;
+            .await
+            .map_err(|e| self.map_transport_error(operation, e))?;
         self.handle_response(operation, response).await
     }
 
@@ -116,7 +117,8 @@ impl JellyfinClient {
             .post(&url)
             .header("X-Emby-Token", &self.config.api_key)
             .send()
-            .await?;
+            .await
+            .map_err(|e| self.map_transport_error(operation, e))?;
         self.handle_response(operation, response).await
     }
 
@@ -137,7 +139,34 @@ impl JellyfinClient {
                 message,
             }));
         }
-        let body: Value = response.json().await?;
-        Ok(body)
+        if status == reqwest::StatusCode::NO_CONTENT {
+            return Ok(Value::Object(Default::default()));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| self.map_transport_error(operation, e))?;
+        if bytes.is_empty() {
+            return Ok(Value::Object(Default::default()));
+        }
+        serde_json::from_slice(&bytes).map_err(|e| {
+            MediaMcpError::Upstream(UpstreamError {
+                service: "jellyfin",
+                operation,
+                status: Some(status.as_u16()),
+                retryable: false,
+                message: format!("decode failed: {}", e),
+            })
+        })
+    }
+
+    fn map_transport_error(&self, operation: &'static str, error: reqwest::Error) -> MediaMcpError {
+        MediaMcpError::Upstream(UpstreamError {
+            service: "jellyfin",
+            operation,
+            status: error.status().map(|s| s.as_u16()),
+            retryable: error.is_timeout() || error.is_connect(),
+            message: format!("request failed: {}", error.without_url()),
+        })
     }
 }
