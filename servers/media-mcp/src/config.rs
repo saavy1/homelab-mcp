@@ -13,7 +13,7 @@ impl std::fmt::Debug for ServiceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServiceConfig")
             .field("name", &self.name)
-            .field("base_url", &self.base_url)
+            .field("base_url", &redacted_url(&self.base_url))
             .field("api_key", &"<redacted>")
             .finish()
     }
@@ -156,6 +156,19 @@ mod tests {
         assert!(debug.contains("name: \"sabnzbd\""));
         assert!(debug.contains("api_key: \"<redacted>\""));
         assert!(!debug.contains("super-secret"));
+    }
+
+    #[test]
+    fn service_config_debug_redacts_userinfo() {
+        let config = ServiceConfig::new(
+            "sabnzbd",
+            "https://user:pass@example.test/path",
+            "super-secret",
+        )
+        .unwrap();
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("user:pass"));
+        assert!(debug.contains("base_url: \"https://<redacted>@example.test/path\""));
     }
 
     #[test]
