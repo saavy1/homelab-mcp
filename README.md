@@ -8,6 +8,7 @@ binary in `servers/`, backed by shared crates in `crates/`.
 | Server | Description |
 |--------|-------------|
 | [`model-catalog-mcp`](servers/model-catalog-mcp/) | Imperative model deployer: search recipes, download weights on NAS, apply KServe InferenceServices, observe status |
+| [`media-mcp`](servers/media-mcp/) | Task-oriented media operator: search/request media in Jellyseerr, control SABnzbd downloads, inspect/refresh Jellyfin |
 
 ## Crates
 
@@ -26,6 +27,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Servers use [rmcp](https://github.com/anthropics/rmcp) with streamable HTTP transport.
 Set `PORT` (default 8080) and server-specific env vars.
+
+Build the media MCP image locally with:
+
+```bash
+docker build -f servers/media-mcp/Dockerfile -t media-mcp:local .
+```
 
 ## Deployment
 
