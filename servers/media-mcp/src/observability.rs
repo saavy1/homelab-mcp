@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::time::Instant;
 use tracing::{Span, info, info_span, warn};
 

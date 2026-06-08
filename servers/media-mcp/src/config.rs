@@ -1,18 +1,40 @@
 use crate::error::MediaMcpError;
 use std::env;
 
-#[derive(Clone, Debug)]
+#[allow(dead_code)]
+#[derive(Clone)]
 pub struct ServiceConfig {
     pub name: &'static str,
     pub base_url: String,
     pub api_key: String,
 }
 
-#[derive(Clone, Debug)]
+impl std::fmt::Debug for ServiceConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceConfig")
+            .field("name", &self.name)
+            .field("base_url", &self.base_url)
+            .field("api_key", &"<redacted>")
+            .finish()
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
 pub struct MediaConfig {
     pub jellyseerr: ServiceConfig,
     pub sabnzbd: ServiceConfig,
     pub jellyfin: ServiceConfig,
+}
+
+impl std::fmt::Debug for MediaConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaConfig")
+            .field("jellyseerr", &self.jellyseerr)
+            .field("sabnzbd", &self.sabnzbd)
+            .field("jellyfin", &self.jellyfin)
+            .finish()
+    }
 }
 
 impl ServiceConfig {
@@ -69,10 +91,26 @@ impl MediaConfig {
     }
 }
 
+#[allow(dead_code)]
 pub fn redacted_url(url: &str) -> String {
-    match url.split_once('?') {
-        Some((base, _)) => format!("{base}?<redacted>"),
-        None => url.to_string(),
+    let mut redacted = url.to_string();
+
+    // Redact userinfo credentials such as https://user:pass@host/path
+    if let Some(scheme_end) = redacted.find("://") {
+        let after_scheme = scheme_end + 3;
+        let rest = &redacted[after_scheme..];
+        let authority_end = rest.find(&['/', '?', '#'][..]).unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        if let Some(at_pos) = authority.find('@') {
+            redacted.replace_range(after_scheme..after_scheme + at_pos, "<redacted>");
+        }
+    }
+
+    // Redact query string
+    if let Some(pos) = redacted.find('?') {
+        format!("{}?<redacted>", &redacted[..pos])
+    } else {
+        redacted
     }
 }
 
@@ -89,8 +127,49 @@ mod tests {
     }
 
     #[test]
+    fn redacted_url_removes_userinfo() {
+        assert_eq!(
+            redacted_url("https://user:pass@example.test/path"),
+            "https://<redacted>@example.test/path"
+        );
+    }
+
+    #[test]
+    fn redacted_url_removes_userinfo_and_query_string() {
+        assert_eq!(
+            redacted_url("https://user:pass@example.test/path?query=secret"),
+            "https://<redacted>@example.test/path?<redacted>"
+        );
+    }
+
+    #[test]
     fn service_config_rejects_blank_api_key() {
         let error = ServiceConfig::new("jellyfin", "http://jellyfin.local", " ").unwrap_err();
         assert!(error.to_string().contains("JELLYFIN_API_KEY is required"));
+    }
+
+    #[test]
+    fn service_config_debug_redacts_api_key() {
+        let config = ServiceConfig::new("sabnzbd", "http://sabnzbd.local", "super-secret").unwrap();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("http://sabnzbd.local"));
+        assert!(debug.contains("name: \"sabnzbd\""));
+        assert!(debug.contains("api_key: \"<redacted>\""));
+        assert!(!debug.contains("super-secret"));
+    }
+
+    #[test]
+    fn media_config_debug_redacts_all_api_keys() {
+        let config = MediaConfig {
+            jellyseerr: ServiceConfig::new("jellyseerr", "http://jellyseerr.local", "secret1")
+                .unwrap(),
+            sabnzbd: ServiceConfig::new("sabnzbd", "http://sabnzbd.local", "secret2").unwrap(),
+            jellyfin: ServiceConfig::new("jellyfin", "http://jellyfin.local", "secret3").unwrap(),
+        };
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("secret1"));
+        assert!(!debug.contains("secret2"));
+        assert!(!debug.contains("secret3"));
+        assert!(debug.contains("api_key: \"<redacted>\""));
     }
 }

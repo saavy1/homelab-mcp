@@ -4,7 +4,9 @@ use serde::Deserialize;
 
 #[derive(Clone)]
 pub struct MediaTools {
+    #[allow(dead_code)]
     config: MediaConfig,
+    #[allow(dead_code)]
     http: reqwest::Client,
 }
 

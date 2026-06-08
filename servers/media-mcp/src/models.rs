@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use homelab_mcp_core::ToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

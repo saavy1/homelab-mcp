@@ -10,6 +10,7 @@ pub struct UpstreamError {
     pub message: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum MediaMcpError {
     #[error("configuration error: {0}")]
@@ -25,6 +26,7 @@ pub enum MediaMcpError {
 }
 
 impl MediaMcpError {
+    #[allow(dead_code)]
     pub fn to_tool_error(&self) -> String {
         match self {
             Self::Upstream(error) => {
