@@ -175,6 +175,96 @@ async fn action_true_status_missing_nzo_ids_maps_to_error() {
 }
 
 #[tokio::test]
+async fn retry_failed_download_status_true_without_nzo_ids_succeeds() {
+    let app = Router::new().route(
+        "/api",
+        get(|Query(params): Query<HashMap<String, String>>| async move {
+            assert_eq!(params.get("mode"), Some(&"retry".to_string()));
+            assert_eq!(params.get("value"), Some(&"h1".to_string()));
+            common::json_response(json!({ "status": true }))
+        }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let result = client.retry_failed_download("h1").await.unwrap();
+    assert_eq!(result.service, "sabnzbd");
+    assert_eq!(result.operation, "retry_failed_download");
+    assert_eq!(result.affected_id.as_deref(), Some("h1"));
+}
+
+#[tokio::test]
+async fn retry_failed_download_status_false_fails() {
+    let app = Router::new().route(
+        "/api",
+        get(|Query(params): Query<HashMap<String, String>>| async move {
+            assert_eq!(params.get("mode"), Some(&"retry".to_string()));
+            assert_eq!(params.get("value"), Some(&"h1".to_string()));
+            common::json_response(json!({ "status": false }))
+        }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let err = client.retry_failed_download("h1").await.unwrap_err();
+    assert!(
+        err.to_string().contains("upstream error"),
+        "expected upstream error, got: {}",
+        err
+    );
+}
+
+#[tokio::test]
+async fn delete_download_fallback_to_history_when_queue_missing_id() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&request_count);
+    let app = Router::new().route(
+        "/api",
+        get(
+            move |Query(params): Query<HashMap<String, String>>| async move {
+                let current = count.fetch_add(1, Ordering::SeqCst);
+                match current {
+                    0 => {
+                        assert_eq!(params.get("mode"), Some(&"queue".to_string()));
+                        assert_eq!(params.get("name"), Some(&"delete".to_string()));
+                        assert_eq!(params.get("value"), Some(&"h1".to_string()));
+                        assert_eq!(params.get("del_files"), Some(&"0".to_string()));
+                        common::json_response(json!({ "status": true, "nzo_ids": [] }))
+                    }
+                    1 => {
+                        assert_eq!(params.get("mode"), Some(&"history".to_string()));
+                        assert_eq!(params.get("name"), Some(&"delete".to_string()));
+                        assert_eq!(params.get("value"), Some(&"h1".to_string()));
+                        assert_eq!(params.get("del_files"), Some(&"0".to_string()));
+                        common::json_response(json!({ "status": true }))
+                    }
+                    _ => panic!("unexpected request #{}", current),
+                }
+            },
+        ),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = SabnzbdClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("sabnzbd", base_url, "key").unwrap(),
+    );
+
+    let result = client.delete_download("h1", false).await.unwrap();
+    assert_eq!(result.operation, "delete_download");
+    assert_eq!(result.affected_id.as_deref(), Some("h1"));
+    assert_eq!(request_count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn serialized_error_does_not_contain_apikey_on_upstream_failure() {
     let app = Router::new().route(
         "/api",

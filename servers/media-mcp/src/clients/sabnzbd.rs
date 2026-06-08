@@ -86,7 +86,9 @@ impl SabnzbdClient {
     ) -> Result<OperationResult, MediaMcpError> {
         self.require_id(nzo_id)?;
         let del_files = if delete_files { "1" } else { "0" };
-        let body = self
+
+        // Try queue delete first.
+        let queue_body = self
             .api(
                 "delete_download",
                 &[
@@ -96,9 +98,39 @@ impl SabnzbdClient {
                     ("del_files", del_files),
                 ],
             )
+            .await;
+
+        match queue_body {
+            Ok(body) => {
+                if self
+                    .validate_action_response("delete_download", nzo_id, &body)
+                    .is_ok()
+                {
+                    return Ok(self.operation_result("delete_download", nzo_id, body));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+
+        // Queue did not affect the requested id; try history delete.
+        let history_body = self
+            .api(
+                "delete_download",
+                &[
+                    ("mode", "history"),
+                    ("name", "delete"),
+                    ("value", nzo_id),
+                    ("del_files", del_files),
+                ],
+            )
             .await?;
-        self.validate_action_response("delete_download", nzo_id, &body)?;
-        Ok(self.operation_result("delete_download", nzo_id, body))
+
+        if history_body.get("status").and_then(|v| v.as_bool()) == Some(true) {
+            return Ok(self.operation_result("delete_download", nzo_id, history_body));
+        }
+
+        self.validate_action_response("delete_download", nzo_id, &history_body)?;
+        Ok(self.operation_result("delete_download", nzo_id, history_body))
     }
 
     pub async fn retry_failed_download(
@@ -112,6 +144,12 @@ impl SabnzbdClient {
                 &[("mode", "retry"), ("value", nzo_id)],
             )
             .await?;
+
+        // SABnzbd history retry may return a status-only success response.
+        if body.get("status").and_then(|v| v.as_bool()) == Some(true) {
+            return Ok(self.operation_result("retry_failed_download", nzo_id, body));
+        }
+
         self.validate_action_response("retry_failed_download", nzo_id, &body)?;
         Ok(self.operation_result("retry_failed_download", nzo_id, body))
     }
