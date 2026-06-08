@@ -63,6 +63,7 @@ impl SabnzbdClient {
                 &[("mode", "queue"), ("name", "pause"), ("value", nzo_id)],
             )
             .await?;
+        self.validate_action_response("pause_download", nzo_id, &body)?;
         Ok(self.operation_result("pause_download", nzo_id, body))
     }
 
@@ -74,6 +75,7 @@ impl SabnzbdClient {
                 &[("mode", "queue"), ("name", "resume"), ("value", nzo_id)],
             )
             .await?;
+        self.validate_action_response("resume_download", nzo_id, &body)?;
         Ok(self.operation_result("resume_download", nzo_id, body))
     }
 
@@ -95,6 +97,7 @@ impl SabnzbdClient {
                 ],
             )
             .await?;
+        self.validate_action_response("delete_download", nzo_id, &body)?;
         Ok(self.operation_result("delete_download", nzo_id, body))
     }
 
@@ -109,6 +112,7 @@ impl SabnzbdClient {
                 &[("mode", "retry"), ("value", nzo_id)],
             )
             .await?;
+        self.validate_action_response("retry_failed_download", nzo_id, &body)?;
         Ok(self.operation_result("retry_failed_download", nzo_id, body))
     }
 
@@ -133,33 +137,47 @@ impl SabnzbdClient {
                 vec![("output", "json"), ("apikey", &self.config.api_key)];
             query.extend_from_slice(params);
 
-            let response = self.http.get(&url).query(&query).send().await?;
+            let response = self
+                .http
+                .get(&url)
+                .query(&query)
+                .send()
+                .await
+                .map_err(|e| map_reqwest_error(e, operation))?;
             let status = response.status();
-            let body: Value = response.json().await?;
 
-            let error_message = body
-                .get("error")
-                .and_then(|e| e.as_str())
-                .map(|s| s.to_string());
-
-            if !status.is_success() || error_message.is_some() {
+            if !status.is_success() {
                 let retryable = status.is_server_error() || status.as_u16() == 429;
-                let message = error_message.unwrap_or_else(|| {
-                    status
-                        .canonical_reason()
-                        .unwrap_or("upstream request failed")
-                        .to_string()
-                });
                 return Err(MediaMcpError::Upstream(UpstreamError {
                     service: "sabnzbd",
                     operation,
-                    status: if status.is_success() {
-                        None
-                    } else {
-                        Some(status.as_u16())
-                    },
+                    status: Some(status.as_u16()),
                     retryable,
-                    message,
+                    message: status
+                        .canonical_reason()
+                        .unwrap_or("upstream request failed")
+                        .to_string(),
+                }));
+            }
+
+            let body_text = response
+                .text()
+                .await
+                .map_err(|e| map_reqwest_error(e, operation))?;
+            let body: Value =
+                serde_json::from_str(&body_text).map_err(|e| map_serde_error(e, operation))?;
+
+            if let Some(error_message) = body
+                .get("error")
+                .and_then(|e| e.as_str())
+                .map(|s| s.to_string())
+            {
+                return Err(MediaMcpError::Upstream(UpstreamError {
+                    service: "sabnzbd",
+                    operation,
+                    status: None,
+                    retryable: false,
+                    message: error_message,
                 }));
             }
 
@@ -167,6 +185,40 @@ impl SabnzbdClient {
         }
         .instrument(span)
         .await
+    }
+
+    fn validate_action_response(
+        &self,
+        operation: &'static str,
+        nzo_id: &str,
+        body: &Value,
+    ) -> Result<(), MediaMcpError> {
+        if body.get("status").and_then(|v| v.as_bool()) == Some(false) {
+            return Err(MediaMcpError::Upstream(UpstreamError {
+                service: "sabnzbd",
+                operation,
+                status: None,
+                retryable: false,
+                message: "operation returned status false".to_string(),
+            }));
+        }
+
+        if let Some(nzo_ids) = body.get("nzo_ids").and_then(|v| v.as_array()) {
+            let found = nzo_ids
+                .iter()
+                .any(|v| v.as_str().map(|s| s == nzo_id).unwrap_or(false));
+            if !found {
+                return Err(MediaMcpError::Upstream(UpstreamError {
+                    service: "sabnzbd",
+                    operation,
+                    status: None,
+                    retryable: false,
+                    message: format!("nzo_id {} not found in response", nzo_id),
+                }));
+            }
+        }
+
+        Ok(())
     }
 
     fn operation_result(&self, operation: &str, nzo_id: &str, source: Value) -> OperationResult {
@@ -177,6 +229,40 @@ impl SabnzbdClient {
             source,
         }
     }
+}
+
+fn map_reqwest_error(err: reqwest::Error, operation: &'static str) -> MediaMcpError {
+    let status = err.status().map(|s| s.as_u16());
+    let retryable =
+        err.is_timeout() || err.is_connect() || status.is_some_and(|s| s >= 500 || s == 429);
+    let message = if err.is_timeout() {
+        "request timed out".to_string()
+    } else if err.is_connect() {
+        "connection failed".to_string()
+    } else if err.is_body() || err.is_decode() {
+        "failed to read response body".to_string()
+    } else if let Some(s) = status {
+        format!("upstream returned HTTP {}", s)
+    } else {
+        "request failed".to_string()
+    };
+    MediaMcpError::Upstream(UpstreamError {
+        service: "sabnzbd",
+        operation,
+        status,
+        retryable,
+        message,
+    })
+}
+
+fn map_serde_error(err: serde_json::Error, operation: &'static str) -> MediaMcpError {
+    MediaMcpError::Upstream(UpstreamError {
+        service: "sabnzbd",
+        operation,
+        status: None,
+        retryable: false,
+        message: format!("invalid JSON response: {}", err),
+    })
 }
 
 fn normalize_queue_item(value: &Value) -> DownloadItem {
