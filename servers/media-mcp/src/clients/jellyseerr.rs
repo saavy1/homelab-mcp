@@ -21,12 +21,15 @@ impl JellyseerrClient {
         let operation = "search";
         let span = info_span!("upstream_http", service = "jellyseerr", operation);
         async {
-            let url = format!("{}/api/v1/search", self.config.base_url);
+            let url = format!(
+                "{}/api/v1/search?query={}",
+                self.config.base_url,
+                percent_encode_query(query)
+            );
             let response = self
                 .http
                 .get(&url)
                 .header("X-Api-Key", &self.config.api_key)
-                .query(&[("query", query)])
                 .send()
                 .await?;
 
@@ -65,10 +68,13 @@ impl JellyseerrClient {
         let span = info_span!("upstream_http", service = "jellyseerr", operation);
         async {
             let url = format!("{}/api/v1/request", self.config.base_url);
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "mediaType": media_type,
                 "mediaId": media_id,
             });
+            if media_type.eq_ignore_ascii_case("tv") {
+                payload["seasons"] = serde_json::json!(self.tv_seasons(media_id).await?);
+            }
 
             let response = self
                 .http
@@ -96,6 +102,53 @@ impl JellyseerrClient {
         }
         .instrument(span)
         .await
+    }
+
+    async fn tv_seasons(&self, media_id: i64) -> Result<Vec<i64>, MediaMcpError> {
+        let operation = "request_media_tv_details";
+        let url = format!("{}/api/v1/tv/{}", self.config.base_url, media_id);
+        let response = self
+            .http
+            .get(&url)
+            .header("X-Api-Key", &self.config.api_key)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let retryable = status.is_server_error() || status.as_u16() == 429;
+            let message = response.text().await.unwrap_or_default();
+            return Err(MediaMcpError::Upstream(UpstreamError {
+                service: "jellyseerr",
+                operation,
+                status: Some(status.as_u16()),
+                retryable,
+                message,
+            }));
+        }
+
+        let body: Value = response.json().await?;
+        let seasons = body
+            .get("seasons")
+            .and_then(|value| value.as_array())
+            .map(|seasons| {
+                seasons
+                    .iter()
+                    .filter_map(|season| {
+                        season.get("seasonNumber").and_then(|value| value.as_i64())
+                    })
+                    .filter(|season_number| *season_number > 0)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if seasons.is_empty() {
+            return Err(MediaMcpError::Validation(format!(
+                "no requestable seasons found for tv media id {media_id}"
+            )));
+        }
+
+        Ok(seasons)
     }
 
     pub async fn list_requests(
@@ -242,6 +295,18 @@ impl JellyseerrClient {
         .instrument(span)
         .await
     }
+}
+
+fn percent_encode_query(query: &str) -> String {
+    query
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 fn normalize_search_result(value: &Value) -> MediaSearchResult {

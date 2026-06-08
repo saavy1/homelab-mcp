@@ -169,9 +169,8 @@ mod tests {
 
     #[test]
     fn mcp_allowed_hosts_adds_extra_hosts_and_ignores_blanks() {
-        let hosts = parse_mcp_allowed_hosts(Some(
-            "media-mcp.tailnet.ts.net, media-mcp.tailnet.ts.net, ",
-        ));
+        let hosts =
+            parse_mcp_allowed_hosts(Some("media-mcp.tailnet.ts.net, media-mcp.tailnet.ts.net, "));
         assert_eq!(
             hosts
                 .iter()

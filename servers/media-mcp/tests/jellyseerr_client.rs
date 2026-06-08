@@ -3,10 +3,12 @@ mod common;
 use axum::{
     Router,
     extract::Path,
+    http::Uri,
     routing::{get, post},
 };
 use media_mcp::{clients::jellyseerr::JellyseerrClient, config::ServiceConfig};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 
 #[tokio::test]
 async fn search_media_normalizes_results() {
@@ -36,6 +38,81 @@ async fn search_media_normalizes_results() {
     assert_eq!(results[0].media_type, "movie");
     assert_eq!(results[0].title, "Alien");
     assert_eq!(results[0].year, Some(1979));
+}
+
+#[tokio::test]
+async fn search_media_percent_encodes_reserved_query_characters() {
+    let app = Router::new().route(
+        "/api/v1/search",
+        get(|uri: Uri| async move {
+            assert_eq!(uri.query(), Some("query=Witch%20Hat%20Atelier"));
+            common::json_response(json!({"results": []}))
+        }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = JellyseerrClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("jellyseerr", base_url, "key").unwrap(),
+    );
+
+    let results = client.search("Witch Hat Atelier").await.unwrap();
+
+    assert!(results.is_empty());
+}
+
+#[tokio::test]
+async fn request_media_tv_includes_available_seasons() {
+    let request_body = Arc::new(Mutex::new(None));
+    let captured_body = request_body.clone();
+    let app = Router::new()
+        .route(
+            "/api/v1/tv/{id}",
+            get(|Path(id): Path<i64>| async move {
+                assert_eq!(id, 196950);
+                common::json_response(json!({
+                    "id": 196950,
+                    "seasons": [
+                        {"seasonNumber": 0},
+                        {"seasonNumber": 1},
+                        {"seasonNumber": 2}
+                    ]
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/request",
+            post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let captured_body = captured_body.clone();
+                async move {
+                    *captured_body.lock().unwrap() = Some(body);
+                    common::json_response(json!({
+                        "id": 42,
+                        "mediaId": 196950,
+                        "mediaType": "tv",
+                        "status": 1,
+                        "title": "Witch Hat Atelier"
+                    }))
+                }
+            }),
+        );
+    let base_url = common::spawn_mock_app(app).await;
+    let client = JellyseerrClient::new(
+        reqwest::Client::new(),
+        ServiceConfig::new("jellyseerr", base_url, "key").unwrap(),
+    );
+
+    let result = client.request_media("tv", 196950).await.unwrap();
+
+    assert_eq!(result.media_id, "196950");
+    assert_eq!(result.media_type, "tv");
+    assert_eq!(
+        request_body.lock().unwrap().as_ref().unwrap(),
+        &json!({
+            "mediaType": "tv",
+            "mediaId": 196950,
+            "seasons": [1, 2]
+        })
+    );
 }
 
 #[tokio::test]
