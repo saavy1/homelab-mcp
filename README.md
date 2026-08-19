@@ -1,19 +1,23 @@
 # homelab-mcp
 
-Custom Rust MCP servers for the Superbloom homelab. Each server is a standalone
-binary in `servers/`, backed by shared crates in `crates/`.
+Rust services, libraries, and an agent-friendly CLI for Superbloom homelab
+operations. Services live in `servers/`, with shared crates in `crates/`.
 
 ## Servers
 
 | Server | Description |
 |--------|-------------|
 | [`model-catalog-mcp`](servers/model-catalog-mcp/) | Imperative model deployer: search recipes, download weights on NAS, apply KServe InferenceServices, observe status |
-| [`media-mcp`](servers/media-mcp/) | Task-oriented media operator: search/request media in Jellyseerr, control SABnzbd downloads, inspect/refresh Jellyfin |
+| [`homelab-api`](servers/homelab-api/) | Versioned HTTP API for media search, requests, downloads, library operations, and sessions |
 
 ## Crates
 
 | Crate | Description |
 |-------|-------------|
+| [`homelab-api-model`](crates/homelab-api-model/) | Stable versioned HTTP envelopes, API models, errors, and capability metadata |
+| [`homelab-client`](crates/homelab-client/) | Curated typed Rust client for the homelab API |
+| [`homelab-cli`](crates/homelab-cli/) | Agent-friendly `homelab` CLI backed by the typed client |
+| [`homelab-media`](crates/homelab-media/) | Transport-neutral media operations and upstream clients |
 | [`homelab-core`](crates/homelab-core/) | transport-neutral operation contracts, MCP `ToolResult<T>` compatibility, digest helpers, error types, tracing init |
 | [`homelab-mcp-k8s`](crates/homelab-mcp-k8s/) | kube-rs live client: download Job CRUD, InferenceService apply, status/logs/events readers |
 | [`model-catalog`](crates/model-catalog/) | Recipe parsing, cluster profile, deployment planning, KServe YAML rendering |
@@ -25,13 +29,14 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Servers use [rmcp](https://github.com/anthropics/rmcp) with streamable HTTP transport.
-Set `PORT` (default 8080) and server-specific env vars.
+The model catalog server uses [rmcp](https://github.com/modelcontextprotocol/rust-sdk)
+with streamable HTTP transport. The media API is available at `/api/v1`; set
+`HOMELAB_API_URL` to that base URL when using the `homelab` CLI.
 
-Build the media MCP image locally with:
+Build the homelab API image locally with:
 
 ```bash
-docker build -f servers/media-mcp/Dockerfile -t media-mcp:local .
+docker build -f servers/homelab-api/Dockerfile -t homelab-api:local .
 ```
 
 ## Deployment

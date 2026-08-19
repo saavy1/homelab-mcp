@@ -1,20 +1,21 @@
-name: Build media-mcp
+name: Build homelab-api
 
 on:
   push:
     branches: [main]
     paths:
-      - "crates/**"
-      - "servers/**"
+      - "crates/homelab-core/**"
+      - "crates/homelab-api-model/**"
+      - "crates/homelab-media/**"
+      - "servers/homelab-api/**"
       - "Cargo.*"
       - ".dockerignore"
-      - "servers/media-mcp/Dockerfile"
-      - ".github/workflows/build-media-mcp.yml"
+      - ".github/workflows/build-homelab-api.yml"
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/media-mcp
+  IMAGE_NAME: ${{ github.repository_owner }}/homelab-api
 
 jobs:
   build-and-push:
@@ -51,7 +52,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: servers/media-mcp/Dockerfile
+          file: servers/homelab-api/Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
