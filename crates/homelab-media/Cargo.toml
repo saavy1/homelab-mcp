@@ -1,0 +1,18 @@
+[package]
+name = "homelab-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+homelab-api-model = { path = "../homelab-api-model" }
+homelab-core = { path = "../homelab-core" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+parking_lot = "0.12"

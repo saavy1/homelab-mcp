@@ -778,6 +778,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "homelab-media"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "homelab-api-model",
+ "homelab-core",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "hostname"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

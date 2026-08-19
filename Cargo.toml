@@ -3,6 +3,7 @@ resolver = "3"
 members = [
   "crates/homelab-core",
   "crates/homelab-api-model",
+  "crates/homelab-media",
   "crates/homelab-mcp-k8s",
   "crates/model-catalog",
   "servers/model-catalog-mcp",
