@@ -1,4 +1,4 @@
-use homelab_mcp_core::Provenance;
+use homelab_core::Provenance;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

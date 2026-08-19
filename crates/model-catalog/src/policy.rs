@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use homelab_mcp_core::ValidationIssue;
+use homelab_core::ValidationIssue;
 
 use crate::{ClusterProfile, DeploymentPlan, Recipe};
 

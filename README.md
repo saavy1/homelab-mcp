@@ -14,7 +14,7 @@ binary in `servers/`, backed by shared crates in `crates/`.
 
 | Crate | Description |
 |-------|-------------|
-| [`homelab-mcp-core`](crates/homelab-mcp-core/) | `ToolResult<T>`, `RiskLevel`, `compute_digest`, error types, tracing init |
+| [`homelab-core`](crates/homelab-core/) | transport-neutral operation contracts, MCP `ToolResult<T>` compatibility, digest helpers, error types, tracing init |
 | [`homelab-mcp-k8s`](crates/homelab-mcp-k8s/) | kube-rs live client: download Job CRUD, InferenceService apply, status/logs/events readers |
 | [`model-catalog`](crates/model-catalog/) | Recipe parsing, cluster profile, deployment planning, KServe YAML rendering |
 

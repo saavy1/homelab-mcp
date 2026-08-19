@@ -6,7 +6,7 @@ version.workspace = true
 
 [dependencies]
 chrono.workspace = true
-homelab-mcp-core = { path = "../homelab-mcp-core" }
+homelab-core = { path = "../homelab-core" }
 k8s-openapi.workspace = true
 kube.workspace = true
 model-catalog = { path = "../model-catalog" }

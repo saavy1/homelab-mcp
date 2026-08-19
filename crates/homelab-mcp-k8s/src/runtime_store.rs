@@ -13,7 +13,7 @@ use model_catalog::{
 use tracing::instrument;
 
 fn runtime_name(prefix: &str, id: &str) -> String {
-    format!("{}-{}", prefix, homelab_mcp_core::sanitize_dns_name(id))
+    format!("{}-{}", prefix, homelab_core::sanitize_dns_name(id))
 }
 
 fn recipe_resource_name(recipe_id: &str) -> String {

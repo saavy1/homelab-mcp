@@ -1,5 +1,5 @@
 use crate::DeploymentPlan;
-use homelab_mcp_core::compute_digest;
+use homelab_core::compute_digest;
 use serde_json::Value;
 
 pub fn plan_to_digest_input(plan: &DeploymentPlan) -> String {

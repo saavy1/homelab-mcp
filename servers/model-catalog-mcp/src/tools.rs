@@ -1,4 +1,4 @@
-use homelab_mcp_core::compute_digest;
+use homelab_core::compute_digest;
 use homelab_mcp_k8s::{
     DownloadJobRef, DownloadJobSpec, DownloadStatus, apply_inferenceservice, build_download_job,
     collect_capacity_report, create_download_job, delete_inferenceservice, delete_runtime_recipe,
@@ -556,7 +556,7 @@ impl ModelCatalogTools {
         upsert_runtime_deployment(client, &self.runtime_state_namespace, &record)
             .await
             .map_err(|error| error.to_string())?;
-        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+        serde_json::to_string(&homelab_core::ToolResult::cluster_write(
             format!("created model deployment {}", plan.name),
             serde_json::json!({
                 "created_name": created,
@@ -604,7 +604,7 @@ impl ModelCatalogTools {
             Err(error) => return Err(error.to_string()),
         }
 
-        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+        serde_json::to_string(&homelab_core::ToolResult::cluster_write(
             format!("stopped model {}", params.name),
             serde_json::json!({ "namespace": params.namespace, "name": params.name }),
         ))
@@ -627,7 +627,7 @@ impl ModelCatalogTools {
             deployments.retain(|deployment| deployment.target == *target);
         }
         info!(target = ?params.target, count = deployments.len(), "list_deployments");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+        serde_json::to_string(&homelab_core::ToolResult::read(
             format!("listed {} runtime deployment(s)", deployments.len()),
             deployments,
         ))
@@ -643,7 +643,7 @@ impl ModelCatalogTools {
         let recipes = model_catalog::load_spark_arena_recipes(&self.spark_arena_dir)
             .map_err(|error| error.to_string())?;
         let matches = model_catalog::search_spark_arena_recipes(&recipes, params.query.as_deref());
-        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+        serde_json::to_string(&homelab_core::ToolResult::read(
             format!("found {} Spark Arena recipe(s)", matches.len()),
             matches,
         ))
@@ -662,7 +662,7 @@ impl ModelCatalogTools {
             .into_iter()
             .find(|recipe| recipe.id == params.id)
             .ok_or_else(|| format!("Spark Arena recipe not found: {}", params.id))?;
-        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+        serde_json::to_string(&homelab_core::ToolResult::read(
             format!("loaded Spark Arena recipe {}", recipe.id),
             recipe,
         ))
@@ -695,7 +695,7 @@ impl ModelCatalogTools {
             .await
             .map_err(|error| error.to_string())?;
         info!(recipe_id = %record.recipe.id, resource = %name, "import_spark_arena_recipe");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+        serde_json::to_string(&homelab_core::ToolResult::cluster_write(
             format!("imported runtime recipe {}", record.recipe.id),
             serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
         ))
@@ -729,7 +729,7 @@ impl ModelCatalogTools {
             .await
             .map_err(|error| error.to_string())?;
         info!(recipe_id = %record.recipe.id, resource = %name, "create_recipe");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+        serde_json::to_string(&homelab_core::ToolResult::cluster_write(
             format!("stored runtime recipe {}", record.recipe.id),
             serde_json::json!({ "resource": name, "recipe_id": record.recipe.id }),
         ))
@@ -749,7 +749,7 @@ impl ModelCatalogTools {
             .await
             .map_err(|error| error.to_string())?;
         info!(recipe_id = %params.recipe_id, "delete_recipe");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::cluster_write(
+        serde_json::to_string(&homelab_core::ToolResult::cluster_write(
             format!("deleted runtime recipe {}", params.recipe_id),
             serde_json::json!({ "recipe_id": params.recipe_id }),
         ))
@@ -770,7 +770,7 @@ impl ModelCatalogTools {
                 .await
                 .map_err(|error| error.to_string())?;
         info!(target = %params.target, active_models = report.active_models.len(), "capacity_report");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+        serde_json::to_string(&homelab_core::ToolResult::read(
             format!("capacity report for {}", params.target),
             report,
         ))
@@ -821,7 +821,7 @@ impl ModelCatalogTools {
             recipe.hardware.estimated_vram_gb,
         );
         info!(recipe_id = %params.recipe_id, target = %params.target, fits = ?estimate.fits, "estimate_fit");
-        serde_json::to_string(&homelab_mcp_core::ToolResult::read(
+        serde_json::to_string(&homelab_core::ToolResult::read(
             format!("fit estimate for {} on {}", params.recipe_id, params.target),
             estimate,
         ))
@@ -1342,7 +1342,7 @@ mod tests {
                 storage_mode: model_catalog::StorageMode::Ephemeral,
                 ingress_policy: model_catalog::IngressPolicy::ClusterLocal,
             },
-            provenance: homelab_mcp_core::Provenance {
+            provenance: homelab_core::Provenance {
                 source: "test".into(),
                 path: None,
                 commit: None,

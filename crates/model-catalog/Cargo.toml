@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-homelab-mcp-core = { path = "../homelab-mcp-core" }
+homelab-core = { path = "../homelab-core" }
 k8s-openapi.workspace = true
 kube.workspace = true
 schemars.workspace = true

@@ -1,11 +1,12 @@
 [package]
-name = "homelab-mcp-core"
+name = "homelab-core"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-schemars.workspace = true
+chrono.workspace = true
+schemars = { workspace = true, features = ["chrono04"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

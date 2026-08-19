@@ -7,7 +7,7 @@ use std::{env, net::SocketAddr, sync::Arc};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    homelab_mcp_core::init_tracing_with_service("media-mcp");
+    homelab_core::init_tracing_with_service("media-mcp");
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8080".into()).parse()?;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 

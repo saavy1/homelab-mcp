@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use homelab_mcp_core::HomelabResult;
+use homelab_core::HomelabResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

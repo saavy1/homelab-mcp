@@ -1,5 +1,5 @@
 use crate::{DeploymentPlan, RuntimeEngine};
-use homelab_mcp_core::{HomelabMcpError, HomelabResult, sanitize_label_value};
+use homelab_core::{HomelabError, HomelabResult, sanitize_label_value};
 use serde_json::{Value, json};
 
 #[allow(unreachable_patterns)]
@@ -218,7 +218,7 @@ fn render_runtime_env(plan: &DeploymentPlan) -> Vec<Value> {
 
 pub fn render_kserve_yaml(plan: &DeploymentPlan) -> HomelabResult<String> {
     serde_yaml::to_string(&render_kserve_value(plan))
-        .map_err(|error| HomelabMcpError::Serialization(error.to_string()))
+        .map_err(|error| HomelabError::Serialization(error.to_string()))
 }
 
 #[cfg(test)]

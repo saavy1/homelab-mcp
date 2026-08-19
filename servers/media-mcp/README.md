@@ -64,6 +64,6 @@ docker build -f servers/media-mcp/Dockerfile -t media-mcp:local .
 ## Observability
 
 The server emits structured logs and per-tool spans through the shared
-`homelab-mcp-core` tracing setup. Tool calls log start/completion/failure events
+`homelab-core` tracing setup. Tool calls log start/completion/failure events
 with service, operation, request id, affected id when available, upstream status,
 and retryability.

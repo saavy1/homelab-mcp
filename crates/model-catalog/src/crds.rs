@@ -157,7 +157,7 @@ mod tests {
         HardwareSpec, IngressPolicy, ModelSpec, Recipe, RecipeSource, RuntimeSpec, ServingSpec,
         StorageMode,
     };
-    use homelab_mcp_core::Provenance;
+    use homelab_core::Provenance;
 
     fn sample_recipe() -> Recipe {
         Recipe {

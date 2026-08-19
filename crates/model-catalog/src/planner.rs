@@ -4,7 +4,7 @@ use crate::{
     ClusterProfile, DeploymentPlan, EnvVar, NodeRole, Recipe, ResourceRequests, RuntimeEngine,
     StorageMode,
 };
-use homelab_mcp_core::{ToolResult, ValidationIssue, sanitize_dns_name};
+use homelab_core::{ToolResult, ValidationIssue, sanitize_dns_name};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeployOverrides {

@@ -1,9 +1,9 @@
 use crate::Recipe;
-use homelab_mcp_core::{HomelabMcpError, HomelabResult};
+use homelab_core::{HomelabError, HomelabResult};
 use std::{fs, path::Path};
 
 pub fn parse_recipe_yaml(input: &str) -> HomelabResult<Recipe> {
-    serde_yaml::from_str(input).map_err(|error| HomelabMcpError::Serialization(error.to_string()))
+    serde_yaml::from_str(input).map_err(|error| HomelabError::Serialization(error.to_string()))
 }
 
 pub fn load_recipe_file(path: impl AsRef<Path>) -> HomelabResult<Recipe> {

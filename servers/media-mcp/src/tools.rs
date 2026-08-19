@@ -4,7 +4,7 @@ use crate::{
     error::MediaMcpError,
     observability::ToolCall,
 };
-use homelab_mcp_core::ToolResult;
+use homelab_core::ToolResult;
 use rmcp::{
     ServerHandler, handler::server::wrapper::Parameters, schemars, tool, tool_handler, tool_router,
 };

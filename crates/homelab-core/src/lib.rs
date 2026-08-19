@@ -8,6 +8,8 @@ use thiserror::Error;
 pub enum RiskLevel {
     Read,
     Pure,
+    Write,
+    Destructive,
     ClusterWrite,
 }
 
@@ -78,8 +80,117 @@ impl<T> ToolResult<T> {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Validation,
+    Forbidden,
+    NotFound,
+    Conflict,
+    Unavailable,
+    Timeout,
+    UnknownOutcome,
+    Internal,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct OperationError {
+    pub code: ErrorCode,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl OperationError {
+    pub fn new(code: ErrorCode, message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retryable,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct ExecutionProvenance {
+    pub service: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+impl ExecutionProvenance {
+    pub fn service(service: impl Into<String>) -> Self {
+        Self {
+            service: service.into(),
+            timestamp: chrono::Utc::now(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Serialize)]
+pub struct OperationEnvelope<T> {
+    pub ok: bool,
+    pub operation: String,
+    pub request_id: String,
+    pub risk: RiskLevel,
+    pub summary: Summary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<T>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<ValidationIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<OperationError>,
+    pub provenance: ExecutionProvenance,
+}
+
+impl<T> OperationEnvelope<T> {
+    pub fn success(
+        operation: impl Into<String>,
+        request_id: impl Into<String>,
+        risk: RiskLevel,
+        summary: impl Into<String>,
+        data: T,
+        provenance: ExecutionProvenance,
+    ) -> Self {
+        Self {
+            ok: true,
+            operation: operation.into(),
+            request_id: request_id.into(),
+            risk,
+            summary: Summary {
+                text: summary.into(),
+            },
+            data: Some(data),
+            issues: Vec::new(),
+            error: None,
+            provenance,
+        }
+    }
+
+    pub fn failure(
+        operation: impl Into<String>,
+        request_id: impl Into<String>,
+        risk: RiskLevel,
+        error: OperationError,
+        provenance: ExecutionProvenance,
+    ) -> Self {
+        Self {
+            ok: false,
+            operation: operation.into(),
+            request_id: request_id.into(),
+            risk,
+            summary: Summary {
+                text: error.message.clone(),
+            },
+            data: None,
+            issues: Vec::new(),
+            error: Some(error),
+            provenance,
+        }
+    }
+}
+
+
 #[derive(Debug, Error)]
-pub enum HomelabMcpError {
+pub enum HomelabError {
     #[error("validation failed: {0}")]
     Validation(String),
     #[error("not found: {0}")]
@@ -96,7 +207,7 @@ pub enum HomelabMcpError {
     Credential(String),
 }
 
-pub type HomelabResult<T> = Result<T, HomelabMcpError>;
+pub type HomelabResult<T> = Result<T, HomelabError>;
 
 pub fn compute_digest(canonical_json: &str) -> String {
     let mut hasher = Sha256::new();
@@ -220,6 +331,38 @@ mod tests {
     fn cluster_write_result_carries_risk_level() {
         let result = ToolResult::cluster_write("applied InferenceService", "qwen3-8b");
         assert_eq!(result.risk, RiskLevel::ClusterWrite);
+    }
+
+    #[test]
+    fn operation_success_serializes_stable_fields() {
+        let result = OperationEnvelope::success(
+            "media.search",
+            "req-1",
+            RiskLevel::Read,
+            "searched media",
+            vec!["Alien"],
+            ExecutionProvenance::service("jellyseerr"),
+        );
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["ok"], true);
+        assert_eq!(json["operation"], "media.search");
+        assert_eq!(json["risk"], "read");
+        assert_eq!(json["data"][0], "Alien");
+        assert!(json.get("error").is_none());
+    }
+
+    #[test]
+    fn operation_failure_has_no_data_and_preserves_retryability() {
+        let result = OperationEnvelope::<serde_json::Value>::failure(
+            "media.search",
+            "req-2",
+            RiskLevel::Read,
+            OperationError::new(ErrorCode::Unavailable, "jellyseerr unavailable", true),
+            ExecutionProvenance::service("jellyseerr"),
+        );
+        assert!(!result.ok);
+        assert!(result.data.is_none());
+        assert!(result.error.as_ref().unwrap().retryable);
     }
 
     #[test]

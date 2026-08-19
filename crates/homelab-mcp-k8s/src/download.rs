@@ -1,4 +1,4 @@
-use homelab_mcp_core::sanitize_label_value;
+use homelab_core::sanitize_label_value;
 use k8s_openapi::api::batch::v1 as batchv1;
 use serde_json::json;
 
