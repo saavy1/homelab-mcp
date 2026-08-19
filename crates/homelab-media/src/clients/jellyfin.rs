@@ -109,8 +109,7 @@ impl JellyfinClient {
         if bytes.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| MediaError::serialization("jellyfin", operation))
+        serde_json::from_slice(&bytes).map_err(|_| MediaError::serialization("jellyfin", operation))
     }
 }
 

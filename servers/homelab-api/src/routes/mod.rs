@@ -1,10 +1,13 @@
 pub(crate) mod media;
 
-use crate::{ApiState, RequestContext, error::{OperationMeta, success_response}};
+use crate::{
+    ApiState, RequestContext,
+    error::{OperationMeta, success_response},
+};
 use axum::{
-    http::StatusCode,
     Extension, Router,
     extract::State,
+    http::StatusCode,
     response::Response,
     routing::{MethodFilter, on},
 };
@@ -63,7 +66,10 @@ pub(crate) fn read_router() -> Router<ApiState> {
 
 pub(crate) fn mutation_router() -> Router<ApiState> {
     Router::new()
-        .route("/api/v1/media/requests", axum::routing::post(media::create_request))
+        .route(
+            "/api/v1/media/requests",
+            axum::routing::post(media::create_request),
+        )
         .route(
             "/api/v1/media/requests/{id}/approve",
             axum::routing::post(media::approve_request),
@@ -108,7 +114,10 @@ async fn capabilities(
                 minor: API_MINOR,
             },
             compatible_cli_major: API_MAJOR,
-            operations: OPERATIONS.iter().map(|operation| (*operation).into()).collect(),
+            operations: OPERATIONS
+                .iter()
+                .map(|operation| (*operation).into())
+                .collect(),
         },
     )
 }

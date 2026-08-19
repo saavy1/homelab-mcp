@@ -3,8 +3,8 @@ mod common;
 use axum::{Router, extract::Query, routing::get};
 use homelab_media::{clients::sabnzbd::SabnzbdClient, config::ServiceConfig};
 use serde_json::json;
-use std::{collections::HashMap, sync::Arc};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{collections::HashMap, sync::Arc};
 
 fn client(base_url: String, key: &str) -> SabnzbdClient {
     SabnzbdClient::new(
@@ -72,10 +72,42 @@ async fn pause_resume_delete_and_retry_validate_action_responses() {
     );
     let client = client(common::spawn_mock_app(app).await, "key");
 
-    assert_eq!(client.pause_download("q1").await.unwrap().affected_id.as_deref(), Some("q1"));
-    assert_eq!(client.resume_download("q2").await.unwrap().affected_id.as_deref(), Some("q2"));
-    assert_eq!(client.delete_download("q3", true).await.unwrap().affected_id.as_deref(), Some("q3"));
-    assert_eq!(client.retry_failed_download("h1").await.unwrap().affected_id.as_deref(), Some("h1"));
+    assert_eq!(
+        client
+            .pause_download("q1")
+            .await
+            .unwrap()
+            .affected_id
+            .as_deref(),
+        Some("q1")
+    );
+    assert_eq!(
+        client
+            .resume_download("q2")
+            .await
+            .unwrap()
+            .affected_id
+            .as_deref(),
+        Some("q2")
+    );
+    assert_eq!(
+        client
+            .delete_download("q3", true)
+            .await
+            .unwrap()
+            .affected_id
+            .as_deref(),
+        Some("q3")
+    );
+    assert_eq!(
+        client
+            .retry_failed_download("h1")
+            .await
+            .unwrap()
+            .affected_id
+            .as_deref(),
+        Some("h1")
+    );
 }
 
 #[tokio::test]

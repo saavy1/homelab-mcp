@@ -8,7 +8,10 @@ const MAX_ROWS: usize = 20;
 const MAX_COLUMNS: usize = 6;
 const MAX_CELL_CHARS: usize = 40;
 
-pub fn envelope<T: Serialize>(value: &OperationEnvelope<T>, output: OutputFormat) -> io::Result<()> {
+pub fn envelope<T: Serialize>(
+    value: &OperationEnvelope<T>,
+    output: OutputFormat,
+) -> io::Result<()> {
     let stdout = io::stdout();
     let mut writer = stdout.lock();
     match output {
@@ -37,7 +40,11 @@ fn write_json(writer: &mut impl Write, value: &impl Serialize) -> io::Result<()>
 fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
     metadata_row(writer, "OPERATION", envelope.get("operation"))?;
     metadata_row(writer, "REQUEST ID", envelope.get("request_id"))?;
-    metadata_row(writer, "STATUS", Some(&Value::String(status(envelope).to_owned())))?;
+    metadata_row(
+        writer,
+        "STATUS",
+        Some(&Value::String(status(envelope).to_owned())),
+    )?;
     metadata_row(writer, "SUMMARY", envelope.pointer("/summary/text"))?;
 
     if envelope.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -49,8 +56,17 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
         Some(Value::Array(rows)) => write_array(writer, rows),
         Some(Value::Object(fields)) => {
             writer.write_all(b"\nFIELD | VALUE\n------|------\n")?;
-            for (name, value) in fields.iter().filter(|(name, _)| safe_field(name)).take(MAX_ROWS) {
-                writeln!(writer, "{} | {}", cell(&Value::String(name.clone())), cell(value))?;
+            for (name, value) in fields
+                .iter()
+                .filter(|(name, _)| safe_field(name))
+                .take(MAX_ROWS)
+            {
+                writeln!(
+                    writer,
+                    "{} | {}",
+                    cell(&Value::String(name.clone())),
+                    cell(value)
+                )?;
             }
             Ok(())
         }
@@ -60,7 +76,11 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
 }
 
 fn metadata_row(writer: &mut impl Write, label: &str, value: Option<&Value>) -> io::Result<()> {
-    writeln!(writer, "{label}: {}", value.map(cell).unwrap_or_else(|| "-".to_owned()))
+    writeln!(
+        writer,
+        "{label}: {}",
+        value.map(cell).unwrap_or_else(|| "-".to_owned())
+    )
 }
 
 fn status(envelope: &Value) -> &'static str {
@@ -98,7 +118,15 @@ fn write_array(writer: &mut impl Write, rows: &[Value]) -> io::Result<()> {
 
     writer.write_all(b"\n")?;
     writeln!(writer, "{}", columns.join(" | "))?;
-    writeln!(writer, "{}", columns.iter().map(|_| "------").collect::<Vec<_>>().join("|"))?;
+    writeln!(
+        writer,
+        "{}",
+        columns
+            .iter()
+            .map(|_| "------")
+            .collect::<Vec<_>>()
+            .join("|")
+    )?;
     for row in rows.iter().take(MAX_ROWS) {
         let Some(row) = row.as_object() else {
             continue;
@@ -114,9 +142,16 @@ fn write_array(writer: &mut impl Write, rows: &[Value]) -> io::Result<()> {
 
 fn safe_field(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    !["credential", "password", "secret", "token", "api_key", "authorization"]
-        .iter()
-        .any(|forbidden| name.contains(forbidden))
+    ![
+        "credential",
+        "password",
+        "secret",
+        "token",
+        "api_key",
+        "authorization",
+    ]
+    .iter()
+    .any(|forbidden| name.contains(forbidden))
 }
 
 fn cell(value: &Value) -> String {

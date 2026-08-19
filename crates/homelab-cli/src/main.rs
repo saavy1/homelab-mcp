@@ -30,7 +30,10 @@ async fn main() {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error)
-            if matches!(error.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) =>
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
         {
             let code = if error.print().is_ok() {
                 EXIT_SUCCESS
@@ -66,14 +69,7 @@ async fn main() {
     let base_url = match configured_base_url() {
         Ok(url) => url,
         Err(message) => {
-            let value = local_error(
-                operation,
-                &request_id,
-                risk,
-                "validation",
-                message,
-                false,
-            );
+            let value = local_error(operation, &request_id, risk, "validation", message, false);
             let code = if render::structured(&value, cli.output).is_ok() {
                 EXIT_INVALID_INPUT
             } else {
@@ -119,7 +115,8 @@ fn configured_base_url() -> Result<Url, &'static str> {
     let value = value
         .into_string()
         .map_err(|_| "HOMELAB_API_URL must be valid Unicode")?;
-    Url::parse(&value).map_err(|_| "HOMELAB_API_URL must be an absolute HTTP(S) URL ending in /api/v1")
+    Url::parse(&value)
+        .map_err(|_| "HOMELAB_API_URL must be an absolute HTTP(S) URL ending in /api/v1")
 }
 
 async fn dispatch(
@@ -137,11 +134,9 @@ async fn dispatch(
             output,
         ),
         Command::Media { command } => match command {
-            MediaCommand::Health => complete_health(
-                client.media().health(request_id).await,
-                request_id,
-                output,
-            ),
+            MediaCommand::Health => {
+                complete_health(client.media().health(request_id).await, request_id, output)
+            }
             MediaCommand::Search { query } => complete(
                 client
                     .media()
@@ -230,14 +225,20 @@ async fn dispatch(
                     output,
                 ),
                 DownloadsCommand::Pause { download_id } => complete(
-                    client.media().pause_download(request_id, &download_id).await,
+                    client
+                        .media()
+                        .pause_download(request_id, &download_id)
+                        .await,
                     "media.downloads.pause",
                     "write",
                     request_id,
                     output,
                 ),
                 DownloadsCommand::Resume { download_id } => complete(
-                    client.media().resume_download(request_id, &download_id).await,
+                    client
+                        .media()
+                        .resume_download(request_id, &download_id)
+                        .await,
                     "media.downloads.resume",
                     "write",
                     request_id,
@@ -261,7 +262,10 @@ async fn dispatch(
                     output,
                 ),
                 DownloadsCommand::Retry { download_id } => complete(
-                    client.media().retry_download(request_id, &download_id).await,
+                    client
+                        .media()
+                        .retry_download(request_id, &download_id)
+                        .await,
                     "media.downloads.retry",
                     "write",
                     request_id,

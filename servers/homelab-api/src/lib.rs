@@ -5,7 +5,10 @@ use axum::{
     Router,
     body::Body,
     extract::Request,
-    http::{HeaderValue, StatusCode, header::{CONTENT_TYPE, HeaderName}},
+    http::{
+        HeaderValue, StatusCode,
+        header::{CONTENT_TYPE, HeaderName},
+    },
     middleware::{self, Next},
     response::Response,
     routing::{MethodFilter, on},
@@ -15,7 +18,10 @@ use homelab_api_model::RiskLevel;
 use homelab_core::ErrorCode;
 use homelab_media::MediaService;
 use std::{
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tower_http::limit::RequestBodyLimitLayer;
@@ -154,12 +160,7 @@ fn route_metadata<'a>(
         );
     }
     if path == "/api/v1/media/library/refresh" {
-        return (
-            "media.library.refresh",
-            RiskLevel::Write,
-            "jellyfin",
-            None,
-        );
+        return ("media.library.refresh", RiskLevel::Write, "jellyfin", None);
     }
     if let Some(rest) = path.strip_prefix("/api/v1/media/downloads/") {
         let (operation, id, risk) = if let Some(id) = rest.strip_suffix("/pause") {

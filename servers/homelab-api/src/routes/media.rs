@@ -42,7 +42,9 @@ pub(crate) async fn search(
 ) -> Response {
     let meta = OperationMeta::new("media.search", RiskLevel::Read, "jellyseerr", None);
     let query = match parse_query::<SearchMediaQuery>(raw.as_deref(), &["query"]) {
-        Ok(query) if !query.query.trim().is_empty() && query.query.len() <= MAX_QUERY_LENGTH => query,
+        Ok(query) if !query.query.trim().is_empty() && query.query.len() <= MAX_QUERY_LENGTH => {
+            query
+        }
         Ok(_) => {
             return validation_response(
                 &context.request_id,
@@ -108,7 +110,10 @@ pub(crate) async fn create_request(
             return response;
         }
     };
-    let result = state.media.create_request(&context.request_id, payload).await;
+    let result = state
+        .media
+        .create_request(&context.request_id, payload)
+        .await;
     service_response(&context.request_id, meta, result)
 }
 
@@ -352,12 +357,7 @@ pub(crate) async fn refresh_library(
     Extension(context): Extension<RequestContext>,
     request: Request,
 ) -> Response {
-    let meta = OperationMeta::new(
-        "media.library.refresh",
-        RiskLevel::Write,
-        "jellyfin",
-        None,
-    );
+    let meta = OperationMeta::new("media.library.refresh", RiskLevel::Write, "jellyfin", None);
     if let Err(message) = require_compatible_major(request.headers()) {
         return conflict_response(&context.request_id, meta, message);
     }
@@ -388,7 +388,11 @@ fn mutation_meta<'a>(
 ) -> Result<OperationMeta<'a>, Box<Response>> {
     let meta = OperationMeta::new(operation, RiskLevel::Write, backend, Some(id));
     if let Err(message) = require_compatible_major(headers) {
-        return Err(Box::new(conflict_response(&context.request_id, meta, message)));
+        return Err(Box::new(conflict_response(
+            &context.request_id,
+            meta,
+            message,
+        )));
     }
     let id_result = if download_id {
         validate_download_id(id)
@@ -396,7 +400,11 @@ fn mutation_meta<'a>(
         validate_id(id)
     };
     if let Err(message) = id_result {
-        return Err(Box::new(validation_response(&context.request_id, meta, message)));
+        return Err(Box::new(validation_response(
+            &context.request_id,
+            meta,
+            message,
+        )));
     }
     Ok(meta)
 }
@@ -420,11 +428,8 @@ async fn require_empty_body<'a>(
             "this operation does not accept a request body",
         ))),
         Ok(Err(_)) => {
-            let mut response = validation_response(
-                request_id,
-                meta,
-                "request body exceeds 65536 bytes",
-            );
+            let mut response =
+                validation_response(request_id, meta, "request body exceeds 65536 bytes");
             *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
             Err(Box::new(response))
         }
@@ -454,8 +459,8 @@ fn require_compatible_major(headers: &HeaderMap) -> Result<(), &'static str> {
 
 fn parse_query<T: DeserializeOwned>(raw: Option<&str>, allowed: &[&str]) -> Result<T, String> {
     let raw = raw.unwrap_or_default();
-    let pairs: Vec<(String, String)> = serde_urlencoded::from_str(raw)
-        .map_err(|_| "query parameters are invalid".to_owned())?;
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(raw).map_err(|_| "query parameters are invalid".to_owned())?;
     if let Some((name, _)) = pairs
         .iter()
         .find(|(name, _)| !allowed.contains(&name.as_str()))
@@ -467,9 +472,9 @@ fn parse_query<T: DeserializeOwned>(raw: Option<&str>, allowed: &[&str]) -> Resu
 
 fn validate_id(id: &str) -> Result<(), &'static str> {
     let safe = !matches!(id, "." | "..")
-        && id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-        });
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
     if id.is_empty() || id.len() > MAX_ID_LENGTH || !safe {
         Err("identifier must contain 1 to 256 safe identifier characters")
     } else {

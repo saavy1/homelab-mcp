@@ -188,7 +188,6 @@ impl<T> OperationEnvelope<T> {
     }
 }
 
-
 #[derive(Debug, Error)]
 pub enum HomelabError {
     #[error("validation failed: {0}")]

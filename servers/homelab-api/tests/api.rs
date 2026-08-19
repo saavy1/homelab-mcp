@@ -81,8 +81,7 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
             .into_response();
     }
     if path == "/api/v1/request/secret/approve" {
-        return (StatusCode::UNAUTHORIZED, format!("upstream body {SECRET}"))
-            .into_response();
+        return (StatusCode::UNAUTHORIZED, format!("upstream body {SECRET}")).into_response();
     }
     if path.starts_with("/api/v1/request/") && method == Method::POST {
         return axum::Json(json!({})).into_response();
@@ -117,8 +116,7 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
         return StatusCode::NO_CONTENT.into_response();
     }
     if path == "/Sessions" {
-        return axum::Json(json!([{"Id": "session-1", "UserName": "saavy"}]))
-            .into_response();
+        return axum::Json(json!([{"Id": "session-1", "UserName": "saavy"}])).into_response();
     }
     if let Some(id) = path.strip_prefix("/Items/") {
         return match id {
@@ -217,10 +215,22 @@ async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
         (Method::POST, "/api/v1/media/requests/42/approve", None),
         (Method::POST, "/api/v1/media/requests/42/decline", None),
         (Method::GET, "/api/v1/media/downloads", None),
-        (Method::POST, "/api/v1/media/downloads/download-1/pause", None),
-        (Method::POST, "/api/v1/media/downloads/download-1/resume", None),
+        (
+            Method::POST,
+            "/api/v1/media/downloads/download-1/pause",
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v1/media/downloads/download-1/resume",
+            None,
+        ),
         (Method::DELETE, "/api/v1/media/downloads/download-1", None),
-        (Method::POST, "/api/v1/media/downloads/download-1/retry", None),
+        (
+            Method::POST,
+            "/api/v1/media/downloads/download-1/retry",
+            None,
+        ),
         (Method::GET, "/api/v1/media/library/status", None),
         (Method::POST, "/api/v1/media/library/refresh", None),
         (Method::GET, "/api/v1/media/sessions", None),
@@ -431,7 +441,11 @@ async fn stable_error_codes_map_to_documented_http_statuses() {
     let (app, _) = app().await;
     for (id, status, code) in [
         ("missing", StatusCode::NOT_FOUND, "not_found"),
-        ("unavailable", StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        (
+            "unavailable",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+        ),
         ("invalid", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     ] {
         let response = app
@@ -453,12 +467,7 @@ async fn stable_error_codes_map_to_documented_http_statuses() {
 #[tokio::test]
 async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
     for (path, backend_path, expected_code, retryable) in [
-        (
-            "/api/v1/media/items/slow",
-            "/Items/slow",
-            "timeout",
-            true,
-        ),
+        ("/api/v1/media/items/slow", "/Items/slow", "timeout", true),
         (
             "/api/v1/media/library/refresh",
             "/Library/Refresh",
@@ -503,9 +512,8 @@ async fn mutation_body_ingestion_times_out_before_backend_dispatch() {
         if let Some(content_type) = content_type {
             builder = builder.header("content-type", content_type);
         }
-        let body = Body::from_stream(
-            futures_util::stream::pending::<Result<Bytes, std::io::Error>>(),
-        );
+        let body =
+            Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
         let response = tokio::time::timeout(
             Duration::from_secs(6),
             app.clone().oneshot(builder.body(body).unwrap()),

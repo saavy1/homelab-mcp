@@ -26,11 +26,7 @@ impl SabnzbdClient {
         let mut downloads = Vec::new();
         if state != Some("history") {
             let queue = self
-                .api(
-                    "list_queue",
-                    &[("mode", "queue"), ("limit", "1000")],
-                    false,
-                )
+                .api("list_queue", &[("mode", "queue"), ("limit", "1000")], false)
                 .await?;
             downloads.extend(
                 queue
@@ -124,10 +120,7 @@ impl SabnzbdClient {
         ))
     }
 
-    pub async fn retry_failed_download(
-        &self,
-        nzo_id: &str,
-    ) -> Result<MediaOperation, MediaError> {
+    pub async fn retry_failed_download(&self, nzo_id: &str) -> Result<MediaOperation, MediaError> {
         require_id(nzo_id)?;
         let value = self
             .api(
@@ -167,12 +160,7 @@ impl SabnzbdClient {
         if action_contains_id(&value, nzo_id) {
             Ok(operation(operation_name, nzo_id))
         } else {
-            Err(MediaError::upstream(
-                "sabnzbd",
-                operation_name,
-                None,
-                true,
-            ))
+            Err(MediaError::upstream("sabnzbd", operation_name, None, true))
         }
     }
 

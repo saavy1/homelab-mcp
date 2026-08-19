@@ -22,8 +22,9 @@ impl ServiceConfig {
                 name.to_uppercase()
             )));
         }
-        let parsed = reqwest::Url::parse(&base_url)
-            .map_err(|_| MediaError::Config(format!("{}_BASE_URL is invalid", name.to_uppercase())))?;
+        let parsed = reqwest::Url::parse(&base_url).map_err(|_| {
+            MediaError::Config(format!("{}_BASE_URL is invalid", name.to_uppercase()))
+        })?;
         if !matches!(parsed.scheme(), "http" | "https") || parsed.host().is_none() {
             return Err(MediaError::Config(format!(
                 "{}_BASE_URL must be an HTTP URL",

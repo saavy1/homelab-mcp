@@ -65,13 +65,10 @@ impl HomelabClient {
         request_id: &str,
     ) -> Result<OperationEnvelope<Capabilities>, ClientError> {
         let envelope = self.fetch_capabilities(request_id).await?;
-        let capabilities = envelope
-            .data
-            .as_ref()
-            .ok_or_else(|| ClientError::Decode {
-                status: StatusCode::OK,
-                request_id: Some(envelope.request_id.clone()),
-            })?;
+        let capabilities = envelope.data.as_ref().ok_or_else(|| ClientError::Decode {
+            status: StatusCode::OK,
+            request_id: Some(envelope.request_id.clone()),
+        })?;
         validate_compatible(capabilities)?;
         let _ = self.compatible_capabilities.set(capabilities.clone());
         Ok(envelope)
@@ -149,12 +146,13 @@ impl HomelabClient {
                 request_id: response_request_id,
             })
         } else {
-            let envelope = serde_json::from_slice::<OperationEnvelope<Value>>(&bytes).map_err(|_| {
-                ClientError::Decode {
-                    status,
-                    request_id: response_request_id,
-                }
-            })?;
+            let envelope =
+                serde_json::from_slice::<OperationEnvelope<Value>>(&bytes).map_err(|_| {
+                    ClientError::Decode {
+                        status,
+                        request_id: response_request_id,
+                    }
+                })?;
             Err(ClientError::Api {
                 status,
                 envelope: Box::new(envelope),

@@ -73,13 +73,7 @@ pub(crate) fn validation_response(
     meta: OperationMeta<'_>,
     message: impl Into<String>,
 ) -> axum::response::Response {
-    failure_response(
-        request_id,
-        meta,
-        ErrorCode::Validation,
-        message,
-        false,
-    )
+    failure_response(request_id, meta, ErrorCode::Validation, message, false)
 }
 
 pub(crate) fn conflict_response(
@@ -123,12 +117,7 @@ pub(crate) fn status_for(code: &ErrorCode) -> StatusCode {
     }
 }
 
-fn completion(
-    meta: &OperationMeta<'_>,
-    request_id: &str,
-    result_class: &str,
-    retryable: bool,
-) {
+fn completion(meta: &OperationMeta<'_>, request_id: &str, result_class: &str, retryable: bool) {
     tracing::info!(
         event = "operation_completed",
         request_id,

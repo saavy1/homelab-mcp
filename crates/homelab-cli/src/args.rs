@@ -24,7 +24,11 @@ impl From<MediaTypeArg> for MediaType {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "homelab", about = "Curated homelab operations", disable_help_subcommand = true)]
+#[command(
+    name = "homelab",
+    about = "Curated homelab operations",
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Json, global = true)]
     pub output: OutputFormat,

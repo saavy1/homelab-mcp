@@ -6,8 +6,8 @@ use axum::{
     response::Response,
     routing::any,
 };
-use serde_json::{Value, json};
 use parking_lot::Mutex;
+use serde_json::{Value, json};
 use std::{
     process::{Command, Output, Stdio},
     sync::Arc,
@@ -17,7 +17,10 @@ use tokio::net::TcpListener;
 #[derive(Clone)]
 enum Mode {
     Normal,
-    Error { status: StatusCode, code: &'static str },
+    Error {
+        status: StatusCode,
+        code: &'static str,
+    },
     Health(&'static str),
     Incompatible,
     ManySearch,
@@ -54,7 +57,9 @@ impl MockApi {
         tokio::spawn(async move {
             axum::serve(
                 listener,
-                Router::new().route("/{*path}", any(mock_handler)).with_state(state),
+                Router::new()
+                    .route("/{*path}", any(mock_handler))
+                    .with_state(state),
             )
             .await
             .unwrap();
@@ -78,7 +83,10 @@ async fn mock_handler(State(state): State<MockState>, request: Request) -> Respo
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let body = to_bytes(request.into_body(), 64 * 1024).await.unwrap().to_vec();
+    let body = to_bytes(request.into_body(), 64 * 1024)
+        .await
+        .unwrap()
+        .to_vec();
     state.seen.lock().push(SeenRequest {
         method: method.clone(),
         uri: uri.clone(),
@@ -88,7 +96,11 @@ async fn mock_handler(State(state): State<MockState>, request: Request) -> Respo
 
     let path = uri.split('?').next().unwrap();
     let (status, payload) = if path == "/api/v1/capabilities" {
-        let compatible_cli_major = if matches!(state.mode, Mode::Incompatible) { 2 } else { 1 };
+        let compatible_cli_major = if matches!(state.mode, Mode::Incompatible) {
+            2
+        } else {
+            1
+        };
         (
             StatusCode::OK,
             envelope(
@@ -115,7 +127,12 @@ async fn mock_handler(State(state): State<MockState>, request: Request) -> Respo
             }),
         )
     } else {
-        normal_response(&state.mode, &method, path, request_id.as_deref().unwrap_or("server-request"))
+        normal_response(
+            &state.mode,
+            &method,
+            path,
+            request_id.as_deref().unwrap_or("server-request"),
+        )
     };
 
     let mut response = Response::new(Body::from(serde_json::to_vec(&payload).unwrap()));
@@ -162,7 +179,12 @@ fn operation_for(method: &Method, path: &str) -> &'static str {
     }
 }
 
-fn normal_response(mode: &Mode, method: &Method, path: &str, request_id: &str) -> (StatusCode, Value) {
+fn normal_response(
+    mode: &Mode,
+    method: &Method,
+    path: &str,
+    request_id: &str,
+) -> (StatusCode, Value) {
     let operation = operation_for(method, path);
     let data = match (method, path) {
         (&Method::GET, "/api/v1/health") => json!({
@@ -188,8 +210,12 @@ fn normal_response(mode: &Mode, method: &Method, path: &str, request_id: &str) -
         (&Method::GET, "/api/v1/media/downloads") => json!([{
             "id": "nzo-1", "name": "Alien", "status": "downloading", "percentage": "20", "size": "1 GB"
         }]),
-        (&Method::GET, "/api/v1/media/library/status") => json!({"item_count": 3, "movie_count": 2, "series_count": 1}),
-        (&Method::GET, "/api/v1/media/sessions") => json!([{"id": "session-1", "user_name": "viewer", "item_name": "Alien"}]),
+        (&Method::GET, "/api/v1/media/library/status") => {
+            json!({"item_count": 3, "movie_count": 2, "series_count": 1})
+        }
+        (&Method::GET, "/api/v1/media/sessions") => {
+            json!([{"id": "session-1", "user_name": "viewer", "item_name": "Alien"}])
+        }
         (&Method::GET, _) if path.starts_with("/api/v1/media/items/") => json!({
             "id": "item-1", "media_type": "movie", "title": "Alien", "year": 1979, "status": "available"
         }),
@@ -209,7 +235,12 @@ fn run(api: &MockApi, args: &[&str]) -> Output {
 }
 
 fn assert_json_success(output: &Output) -> Value {
-    assert_eq!(output.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["ok"], true);
     value
@@ -221,8 +252,23 @@ async fn representative_commands_emit_one_json_document_and_exact_requests() {
     for args in [
         vec!["capabilities"],
         vec!["media", "search", "--query", "Alien"],
-        vec!["media", "request", "create", "--media-id", "100", "--media-type", "movie"],
-        vec!["media", "downloads", "delete", "--download-id", "nzo-1", "--delete-files"],
+        vec![
+            "media",
+            "request",
+            "create",
+            "--media-id",
+            "100",
+            "--media-type",
+            "movie",
+        ],
+        vec![
+            "media",
+            "downloads",
+            "delete",
+            "--download-id",
+            "nzo-1",
+            "--delete-files",
+        ],
         vec!["media", "library", "status"],
         vec!["media", "sessions", "list"],
     ] {
@@ -230,12 +276,32 @@ async fn representative_commands_emit_one_json_document_and_exact_requests() {
     }
 
     let requests = api.requests();
-    assert!(requests.iter().any(|request| request.method == Method::GET && request.uri == "/api/v1/media/search?query=Alien"));
-    let create = requests.iter().find(|request| request.method == Method::POST && request.uri == "/api/v1/media/requests").unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&create.body).unwrap(), json!({"media_id": 100, "media_type": "movie"}));
-    assert!(requests.iter().any(|request| request.method == Method::DELETE && request.uri == "/api/v1/media/downloads/nzo-1?delete_files=true"));
-    assert!(requests.iter().any(|request| request.uri == "/api/v1/media/library/status"));
-    assert!(requests.iter().any(|request| request.uri == "/api/v1/media/sessions"));
+    assert!(requests.iter().any(|request| request.method == Method::GET
+        && request.uri == "/api/v1/media/search?query=Alien"));
+    let create = requests
+        .iter()
+        .find(|request| request.method == Method::POST && request.uri == "/api/v1/media/requests")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&create.body).unwrap(),
+        json!({"media_id": 100, "media_type": "movie"})
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.method == Method::DELETE
+                && request.uri == "/api/v1/media/downloads/nzo-1?delete_files=true")
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.uri == "/api/v1/media/library/status")
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.uri == "/api/v1/media/sessions")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -286,10 +352,16 @@ async fn generated_and_accepted_request_ids_are_sent_without_reading_stdin() {
     assert!(uuid::Uuid::parse_str(&generated).is_ok());
 
     let accepted_api = MockApi::spawn(Mode::Normal).await;
-    let output = run(&accepted_api, &["--request-id", "agent-correlation-1", "capabilities"]);
+    let output = run(
+        &accepted_api,
+        &["--request-id", "agent-correlation-1", "capabilities"],
+    );
     let value = assert_json_success(&output);
     assert_eq!(value["request_id"], "agent-correlation-1");
-    assert_eq!(accepted_api.requests()[0].request_id.as_deref(), Some("agent-correlation-1"));
+    assert_eq!(
+        accepted_api.requests()[0].request_id.as_deref(),
+        Some("agent-correlation-1")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -330,13 +402,19 @@ async fn api_errors_and_partial_health_use_stable_exit_classes() {
     assert_eq!(value["data"]["status"], "degraded");
 
     let unavailable = MockApi::spawn(Mode::Health("unavailable")).await;
-    assert_eq!(run(&unavailable, &["media", "health"]).status.code(), Some(5));
+    assert_eq!(
+        run(&unavailable, &["media", "health"]).status.code(),
+        Some(5)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn table_output_is_bounded_and_cannot_render_unknown_credentials() {
     let api = MockApi::spawn(Mode::ManySearch).await;
-    let output = run(&api, &["--output", "table", "media", "search", "--query", "Alien"]);
+    let output = run(
+        &api,
+        &["--output", "table", "media", "search", "--query", "Alien"],
+    );
     assert_eq!(output.status.code(), Some(0));
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("Title 0"));
@@ -349,7 +427,10 @@ async fn table_output_is_bounded_and_cannot_render_unknown_credentials() {
 #[tokio::test(flavor = "multi_thread")]
 async fn destructive_commands_stop_on_incompatibility_and_are_never_retried() {
     let incompatible = MockApi::spawn(Mode::Incompatible).await;
-    let output = run(&incompatible, &["media", "downloads", "delete", "--download-id", "nzo-1"]);
+    let output = run(
+        &incompatible,
+        &["media", "downloads", "delete", "--download-id", "nzo-1"],
+    );
     assert_eq!(output.status.code(), Some(4));
     let requests = incompatible.requests();
     assert_eq!(requests.len(), 1);
@@ -360,8 +441,17 @@ async fn destructive_commands_stop_on_incompatibility_and_are_never_retried() {
         code: "unavailable",
     })
     .await;
-    let output = run(&unavailable, &["media", "downloads", "delete", "--download-id", "nzo-1"]);
+    let output = run(
+        &unavailable,
+        &["media", "downloads", "delete", "--download-id", "nzo-1"],
+    );
     assert_eq!(output.status.code(), Some(5));
     let requests = unavailable.requests();
-    assert_eq!(requests.iter().filter(|request| request.method == Method::DELETE).count(), 1);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == Method::DELETE)
+            .count(),
+        1
+    );
 }

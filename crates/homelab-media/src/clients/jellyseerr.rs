@@ -46,7 +46,13 @@ impl JellyseerrClient {
             body["seasons"] = json!(seasons);
         }
         let value = self
-            .send(Method::POST, "request_media", "/api/v1/request", Some(body), true)
+            .send(
+                Method::POST,
+                "request_media",
+                "/api/v1/request",
+                Some(body),
+                true,
+            )
             .await?;
         normalize_request(&value)
             .ok_or_else(|| MediaError::serialization("jellyseerr", "request_media"))
@@ -74,11 +80,13 @@ impl JellyseerrClient {
     }
 
     pub async fn approve_request(&self, request_id: &str) -> Result<MediaOperation, MediaError> {
-        self.request_action(request_id, "approve_request", "approve").await
+        self.request_action(request_id, "approve_request", "approve")
+            .await
     }
 
     pub async fn decline_request(&self, request_id: &str) -> Result<MediaOperation, MediaError> {
-        self.request_action(request_id, "decline_request", "decline").await
+        self.request_action(request_id, "decline_request", "decline")
+            .await
     }
 
     async fn tv_seasons(&self, media_id: i64) -> Result<Vec<i64>, MediaError> {
@@ -232,20 +240,28 @@ fn normalize_search_result(value: &Value) -> Option<MediaSearchItem> {
 
 fn normalize_request(value: &Value) -> Option<MediaRequest> {
     let media = value.get("media");
-    let media_id = value
-        .get("mediaId")
-        .and_then(scalar_string)
-        .or_else(|| media.and_then(|item| item.get("tmdbId")).and_then(scalar_string))?;
+    let media_id = value.get("mediaId").and_then(scalar_string).or_else(|| {
+        media
+            .and_then(|item| item.get("tmdbId"))
+            .and_then(scalar_string)
+    })?;
     let media_type = value
         .get("mediaType")
         .and_then(Value::as_str)
-        .or_else(|| media.and_then(|item| item.get("mediaType")).and_then(Value::as_str))
+        .or_else(|| {
+            media
+                .and_then(|item| item.get("mediaType"))
+                .and_then(Value::as_str)
+        })
         .and_then(parse_media_type)?;
     Some(MediaRequest {
         id: value.get("id").and_then(scalar_string)?,
         media_id,
         media_type,
-        status: value.get("status").and_then(scalar_string).unwrap_or_default(),
+        status: value
+            .get("status")
+            .and_then(scalar_string)
+            .unwrap_or_default(),
         title: value
             .get("title")
             .and_then(Value::as_str)

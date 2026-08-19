@@ -124,7 +124,12 @@ async fn item_details_are_typed_and_blank_id_fails_locally() {
 async fn authorization_body_and_token_are_redacted_from_decode_errors() {
     let app = Router::new().route(
         "/Items/Counts",
-        get(|| async { (axum::http::StatusCode::OK, "Authorization Bearer secret_token_xyz") }),
+        get(|| async {
+            (
+                axum::http::StatusCode::OK,
+                "Authorization Bearer secret_token_xyz",
+            )
+        }),
     );
 
     let error = client(common::spawn_mock_app(app).await, "secret_token_xyz")

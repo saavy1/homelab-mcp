@@ -1,8 +1,6 @@
 use crate::{
     MediaConfig, MediaError,
-    clients::{
-        jellyfin::JellyfinClient, jellyseerr::JellyseerrClient, sabnzbd::SabnzbdClient,
-    },
+    clients::{jellyfin::JellyfinClient, jellyseerr::JellyseerrClient, sabnzbd::SabnzbdClient},
 };
 use homelab_api_model::{
     ActiveSession, BackendHealth, CreateMediaRequest, DownloadItem, HealthStatus, LibraryStatus,

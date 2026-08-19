@@ -8,8 +8,8 @@ use axum::{
 };
 use homelab_api_model::MediaType;
 use homelab_media::{clients::jellyseerr::JellyseerrClient, config::ServiceConfig};
-use serde_json::json;
 use parking_lot::Mutex;
+use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -50,7 +50,11 @@ async fn search_normalizes_without_raw_source_and_encodes_query() {
     assert_eq!(results[0].title, "Alien");
     assert_eq!(results[0].year, Some(1979));
     assert_eq!(results[0].status.as_deref(), Some("5"));
-    assert!(!serde_json::to_string(&results).unwrap().contains("rawSecret"));
+    assert!(
+        !serde_json::to_string(&results)
+            .unwrap()
+            .contains("rawSecret")
+    );
     assert!(!serde_json::to_string(&results).unwrap().contains("source"));
 }
 
