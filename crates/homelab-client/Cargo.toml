@@ -1,0 +1,19 @@
+[package]
+name = "homelab-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+homelab-api-model = { path = "../homelab-api-model" }
+reqwest.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url = "2.5"
+
+[dev-dependencies]
+axum.workspace = true
+homelab-core = { path = "../homelab-core" }
+parking_lot = "0.12"
