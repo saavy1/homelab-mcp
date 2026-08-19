@@ -93,7 +93,8 @@ impl MediaError {
         status: Option<u16>,
         mutating: bool,
     ) -> Self {
-        let retryable = !mutating && status.is_none_or(|value| value >= 500 || value == 408);
+        let retryable =
+            !mutating && status.is_none_or(|value| value >= 500 || matches!(value, 408 | 429));
         Self::Upstream(UpstreamError {
             service,
             operation,

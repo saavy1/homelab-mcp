@@ -130,6 +130,43 @@ async fn timeout_after_mutation_is_unknown_outcome_not_retryable_and_not_retried
 }
 
 #[tokio::test]
+async fn read_rate_limit_is_retryable() {
+    let app = Router::new().route(
+        "/api/v1/search",
+        get(|| async { StatusCode::TOO_MANY_REQUESTS }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let service = service(config(base_url.clone(), base_url.clone(), base_url));
+
+    let error = service.search("req-search", "alien").await.unwrap_err();
+
+    assert!(error.retryable());
+}
+
+#[tokio::test]
+async fn mutation_rate_limit_is_not_retryable() {
+    let app = Router::new().route(
+        "/api/v1/request",
+        post(|| async { StatusCode::TOO_MANY_REQUESTS }),
+    );
+    let base_url = common::spawn_mock_app(app).await;
+    let service = service(config(base_url.clone(), base_url.clone(), base_url));
+
+    let error = service
+        .create_request(
+            "req-create",
+            CreateMediaRequest {
+                media_id: 100,
+                media_type: MediaType::Movie,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(!error.retryable());
+}
+
+#[tokio::test]
 async fn blank_ids_fail_locally_at_the_service_boundary() {
     let requests = Arc::new(AtomicUsize::new(0));
     let request_count = Arc::clone(&requests);

@@ -66,6 +66,7 @@ impl JellyseerrClient {
         Ok(value
             .get("results")
             .and_then(Value::as_array)
+            .or_else(|| value.as_array())
             .into_iter()
             .flatten()
             .filter_map(normalize_request)
@@ -90,14 +91,20 @@ impl JellyseerrClient {
                 false,
             )
             .await?;
-        Ok(value
+        let seasons = value
             .get("seasons")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(|season| season.get("seasonNumber").and_then(Value::as_i64))
             .filter(|season| *season > 0)
-            .collect())
+            .collect::<Vec<_>>();
+        if seasons.is_empty() {
+            return Err(MediaError::Validation(format!(
+                "no requestable seasons found for tv media id {media_id}"
+            )));
+        }
+        Ok(seasons)
     }
 
     async fn request_action(

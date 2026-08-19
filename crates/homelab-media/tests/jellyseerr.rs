@@ -11,6 +11,7 @@ use homelab_media::{clients::jellyseerr::JellyseerrClient, config::ServiceConfig
 use serde_json::json;
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn client(base_url: String, key: &str) -> JellyseerrClient {
     JellyseerrClient::new(
@@ -101,6 +102,36 @@ async fn tv_request_excludes_season_zero_and_includes_available_seasons() {
 }
 
 #[tokio::test]
+async fn tv_request_with_no_positive_seasons_fails_before_post() {
+    let posts = Arc::new(AtomicUsize::new(0));
+    let post_count = Arc::clone(&posts);
+    let app = Router::new()
+        .route(
+            "/api/v1/tv/{id}",
+            get(|| async {
+                common::json_response(json!({
+                    "seasons": [{"seasonNumber": 0}]
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/request",
+            post(move || {
+                post_count.fetch_add(1, Ordering::SeqCst);
+                async { common::json_response(json!({})) }
+            }),
+        );
+
+    let error = client(common::spawn_mock_app(app).await, "key")
+        .request_media(MediaType::Tv, 196950)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, homelab_media::MediaError::Validation(_)));
+    assert_eq!(posts.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn list_requests_normalizes_status_and_nested_media_type() {
     let app = Router::new().route(
         "/api/v1/request",
@@ -129,6 +160,31 @@ async fn list_requests_normalizes_status_and_nested_media_type() {
     assert_eq!(results[0].status, "1");
     assert_eq!(results[0].title.as_deref(), Some("Inception"));
     assert!(!serde_json::to_string(&results).unwrap().contains("token"));
+}
+
+#[tokio::test]
+async fn list_requests_accepts_a_top_level_array() {
+    let app = Router::new().route(
+        "/api/v1/request",
+        get(|| async {
+            common::json_response(json!([{
+                "id": 43,
+                "mediaId": 102,
+                "mediaType": "tv",
+                "status": "approved",
+                "title": "Severance"
+            }]))
+        }),
+    );
+
+    let results = client(common::spawn_mock_app(app).await, "key")
+        .list_requests(None)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].id, "43");
+    assert_eq!(results[0].media_type, MediaType::Tv);
 }
 
 #[tokio::test]
