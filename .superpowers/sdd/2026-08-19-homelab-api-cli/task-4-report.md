@@ -27,10 +27,22 @@ A temporary HEAD-method characterization expected `405`, but Axum intentionally 
 
 ## Verification
 
-- `cargo test -p homelab-api --test api` — 14 passed; repeated twice consecutively after the tracing fix.
-- `cargo test -p homelab-api` — final focused verification passed 14 tests across four suites with zero failures.
+- `cargo test -p homelab-api --test api` — final router contract run passed 15 tests with zero failures.
+- `cargo test -p homelab-api` — final focused package run passed 15 tests across four suites with zero failures.
 - Live binary smoke: `/api/v1/capabilities` returned `200`, a typed version `1.0` envelope, and matching generated request ID header/body; `/mcp` returned `404`.
 - Audit smoke with `RUST_LOG=info`: one JSON completion event was observed for request `smoke-audit-1` with operation, risk, result class, duration, backend, target ID, and retry fields.
 - Missing-configuration integration test starts the built binary without API keys and confirms a nonzero exit.
 
-Per assignment, formatter, linter, Docker build, and project-wide test suites were not run.
+Formatter, Docker build, and project-wide test suites were not run.
+
+## Review round 1
+
+RED: `cargo test -p homelab-api --test api mutation_body_ingestion_times_out_before_backend_dispatch` failed because the outer six-second test guard elapsed while a pending chunked mutation body remained unread. The backend call log stayed empty, isolating the hang to pre-dispatch body ingestion.
+
+GREEN: both JSON creation bodies and nominally bodyless mutation bodies now have a five-second timeout around ingestion only. The timeout is removed before calling `MediaService`, so it cannot reclassify an in-flight backend mutation or obscure `unknown_outcome`.
+
+The first `cargo clippy -p homelab-api --all-targets -- -D warnings` run failed on `clippy::result_large_err` for helpers returning `Response` directly in the error variant. Error-path responses are now boxed, and the unused top-level `Extension` import was removed before the clean rerun.
+
+- `cargo test -p homelab-api --test api` — 15 passed, 0 failed.
+- `cargo test -p homelab-api` — 15 passed across four suites, 0 failed.
+- `cargo clippy -p homelab-api --all-targets -- -D warnings` — passed with zero warnings.

@@ -2,7 +2,7 @@ mod error;
 mod routes;
 
 use axum::{
-    Extension, Router,
+    Router,
     body::Body,
     extract::Request,
     http::{HeaderValue, StatusCode, header::{CONTENT_TYPE, HeaderName}},

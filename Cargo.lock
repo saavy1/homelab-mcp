@@ -736,6 +736,7 @@ name = "homelab-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "homelab-api-model",
  "homelab-core",
  "homelab-media",

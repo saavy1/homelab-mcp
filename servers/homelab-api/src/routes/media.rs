@@ -1,7 +1,7 @@
 use crate::{
     ApiState, RequestContext,
     error::{
-        OperationMeta, conflict_response, service_response, validation_response,
+        OperationMeta, conflict_response, failure_response, service_response, validation_response,
     },
 };
 use axum::{
@@ -15,12 +15,16 @@ use homelab_api_model::{
     API_MAJOR, CreateMediaRequest, DeleteDownloadQuery, ListDownloadsQuery, ListRequestsQuery,
     RiskLevel, SearchMediaQuery,
 };
+use homelab_core::ErrorCode;
 use serde::de::DeserializeOwned;
+use std::time::Duration;
+use tokio::time::timeout;
 
 const API_MAJOR_HEADER: &str = "x-homelab-api-major";
 const MAX_QUERY_LENGTH: usize = 256;
 const MAX_STATUS_LENGTH: usize = 64;
 const MAX_ID_LENGTH: usize = 256;
+const MUTATION_BODY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) async fn health(
     State(state): State<ApiState>,
@@ -79,9 +83,15 @@ pub(crate) async fn create_request(
     if let Err(message) = require_compatible_major(request.headers()) {
         return conflict_response(&context.request_id, meta, message);
     }
-    let Json(payload) = match Json::<CreateMediaRequest>::from_request(request, &state).await {
-        Ok(payload) => payload,
-        Err(rejection) => {
+    let Json(payload) = match timeout(
+        MUTATION_BODY_TIMEOUT,
+        Json::<CreateMediaRequest>::from_request(request, &state),
+    )
+    .await
+    {
+        Err(_) => return body_timeout_response(&context.request_id, meta),
+        Ok(Ok(payload)) => payload,
+        Ok(Err(rejection)) => {
             let oversized = rejection.status() == StatusCode::PAYLOAD_TOO_LARGE;
             let mut response = validation_response(
                 &context.request_id,
@@ -145,11 +155,11 @@ pub(crate) async fn approve_request(
         false,
     ) {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.approve_request(&context.request_id, &id).await;
     service_response(&context.request_id, meta, result)
@@ -170,11 +180,11 @@ pub(crate) async fn decline_request(
         false,
     ) {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.decline_request(&context.request_id, &id).await;
     service_response(&context.request_id, meta, result)
@@ -223,11 +233,11 @@ pub(crate) async fn pause_download(
         true,
     ) {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.pause_download(&context.request_id, &id).await;
     service_response(&context.request_id, meta, result)
@@ -248,11 +258,11 @@ pub(crate) async fn resume_download(
         true,
     ) {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.resume_download(&context.request_id, &id).await;
     service_response(&context.request_id, meta, result)
@@ -294,7 +304,7 @@ pub(crate) async fn delete_download(
     }
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state
         .media
@@ -318,11 +328,11 @@ pub(crate) async fn retry_download(
         true,
     ) {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.retry_download(&context.request_id, &id).await;
     service_response(&context.request_id, meta, result)
@@ -353,7 +363,7 @@ pub(crate) async fn refresh_library(
     }
     let meta = match require_empty_body(request, &context.request_id, meta).await {
         Ok(meta) => meta,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let result = state.media.refresh_library(&context.request_id).await;
     service_response(&context.request_id, meta, result)
@@ -375,10 +385,10 @@ fn mutation_meta<'a>(
     operation: &'static str,
     backend: &'static str,
     download_id: bool,
-) -> Result<OperationMeta<'a>, Response> {
+) -> Result<OperationMeta<'a>, Box<Response>> {
     let meta = OperationMeta::new(operation, RiskLevel::Write, backend, Some(id));
     if let Err(message) = require_compatible_major(headers) {
-        return Err(conflict_response(&context.request_id, meta, message));
+        return Err(Box::new(conflict_response(&context.request_id, meta, message)));
     }
     let id_result = if download_id {
         validate_download_id(id)
@@ -386,7 +396,7 @@ fn mutation_meta<'a>(
         validate_id(id)
     };
     if let Err(message) = id_result {
-        return Err(validation_response(&context.request_id, meta, message));
+        return Err(Box::new(validation_response(&context.request_id, meta, message)));
     }
     Ok(meta)
 }
@@ -395,24 +405,40 @@ async fn require_empty_body<'a>(
     request: Request,
     request_id: &str,
     meta: OperationMeta<'a>,
-) -> Result<OperationMeta<'a>, Response> {
-    match to_bytes(request.into_body(), 64 * 1024).await {
-        Ok(bytes) if bytes.is_empty() => Ok(meta),
-        Ok(_) => Err(validation_response(
+) -> Result<OperationMeta<'a>, Box<Response>> {
+    match timeout(
+        MUTATION_BODY_TIMEOUT,
+        to_bytes(request.into_body(), 64 * 1024),
+    )
+    .await
+    {
+        Err(_) => Err(Box::new(body_timeout_response(request_id, meta))),
+        Ok(Ok(bytes)) if bytes.is_empty() => Ok(meta),
+        Ok(Ok(_)) => Err(Box::new(validation_response(
             request_id,
             meta,
             "this operation does not accept a request body",
-        )),
-        Err(_) => {
+        ))),
+        Ok(Err(_)) => {
             let mut response = validation_response(
                 request_id,
                 meta,
                 "request body exceeds 65536 bytes",
             );
             *response.status_mut() = StatusCode::PAYLOAD_TOO_LARGE;
-            Err(response)
+            Err(Box::new(response))
         }
     }
+}
+
+fn body_timeout_response(request_id: &str, meta: OperationMeta<'_>) -> Response {
+    failure_response(
+        request_id,
+        meta,
+        ErrorCode::Timeout,
+        "request body did not complete in time",
+        true,
+    )
 }
 
 fn require_compatible_major(headers: &HeaderMap) -> Result<(), &'static str> {

@@ -492,6 +492,35 @@ async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
     }
 }
 
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn mutation_body_ingestion_times_out_before_backend_dispatch() {
+    let (app, backend) = app().await;
+    for (path, content_type) in [
+        ("/api/v1/media/requests", Some("application/json")),
+        ("/api/v1/media/requests/42/approve", None),
+    ] {
+        let mut builder = mutation(Method::POST, path);
+        if let Some(content_type) = content_type {
+            builder = builder.header("content-type", content_type);
+        }
+        let body = Body::from_stream(
+            futures_util::stream::pending::<Result<Bytes, std::io::Error>>(),
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(6),
+            app.clone().oneshot(builder.body(body).unwrap()),
+        )
+        .await
+        .expect("mutation body ingestion must have its own timeout")
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "timeout");
+        assert_eq!(body["error"]["retryable"], true);
+    }
+    assert!(backend.calls.lock().is_empty());
+}
+
 #[tokio::test]
 async fn request_ids_are_accepted_or_generated_and_propagated() {
     let (app, _) = app().await;

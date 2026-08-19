@@ -19,6 +19,8 @@ tower-http = { workspace = true, features = ["limit", "timeout"] }
 tracing.workspace = true
 
 [dev-dependencies]
+futures-util = "0.3"
 http-body-util = "0.1"
 parking_lot = "0.12"
 tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
