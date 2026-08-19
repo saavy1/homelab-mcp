@@ -1,0 +1,13 @@
+[package]
+name = "homelab-api-model"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+homelab-core = { path = "../homelab-core" }
+schemars.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
