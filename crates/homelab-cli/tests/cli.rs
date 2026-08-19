@@ -293,6 +293,21 @@ async fn generated_and_accepted_request_ids_are_sent_without_reading_stdin() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn request_ids_that_are_not_http_header_values_fail_before_http() {
+    let api = MockApi::spawn(Mode::Normal).await;
+    let output = run(
+        &api,
+        &["--request-id", "agent\ninjected-header", "capabilities"],
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "validation");
+    assert!(api.requests().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn api_errors_and_partial_health_use_stable_exit_classes() {
     for (status, code, expected) in [
         (StatusCode::FORBIDDEN, "forbidden", 3),

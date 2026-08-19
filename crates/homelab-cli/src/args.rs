@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum, builder::NonEmptyStringValueParser};
 use homelab_api_model::MediaType;
+use reqwest::header::HeaderValue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum OutputFormat {
@@ -28,11 +29,18 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = OutputFormat::Json, global = true)]
     pub output: OutputFormat,
 
-    #[arg(long, value_parser = NonEmptyStringValueParser::new())]
+    #[arg(long, value_parser = parse_correlation_id)]
     pub request_id: Option<String>,
 
     #[command(subcommand)]
     pub command: Command,
+}
+
+fn parse_correlation_id(value: &str) -> Result<String, String> {
+    if value.is_empty() || value.parse::<HeaderValue>().is_err() {
+        return Err("request ID must be a non-empty HTTP header value".to_owned());
+    }
+    Ok(value.to_owned())
 }
 
 #[derive(Debug, Subcommand)]
