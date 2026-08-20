@@ -1,5 +1,5 @@
 use crate::args::OutputFormat;
-use homelab_api_model::OperationEnvelope;
+use homelab_api_model::{CompletenessStatus, OperationEnvelope, SeasonAvailability};
 use serde::Serialize;
 use serde_json::Value;
 use std::io::{self, Write};
@@ -20,6 +20,18 @@ pub fn envelope<T: Serialize>(
             let value = serde_json::to_value(value).map_err(io::Error::other)?;
             write_table(&mut writer, &value)
         }
+    }
+}
+
+pub fn availability_envelope(
+    value: &OperationEnvelope<SeasonAvailability>,
+    output: OutputFormat,
+) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    match output {
+        OutputFormat::Json => write_json(&mut writer, value),
+        OutputFormat::Table => write_availability_table(&mut writer, value),
     }
 }
 
@@ -52,11 +64,6 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
         return Ok(());
     }
 
-    if envelope.get("operation").and_then(Value::as_str)
-        == Some("media.library.availability")
-    {
-        return write_availability_table(writer, envelope);
-    }
 
     match envelope.get("data") {
         Some(Value::Array(rows)) => write_array(writer, rows),
@@ -81,34 +88,53 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
     }
 }
 
-fn write_availability_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
-    let missing = Value::Null;
-    let data = envelope.get("data").unwrap_or(&missing);
-    let next_airing = match (
-        data.pointer("/next_airing/episode_number"),
-        data.pointer("/next_airing/air_date"),
-    ) {
-        (Some(episode_number), Some(air_date)) if !air_date.is_null() => Value::String(format!(
-            "E{} {}",
-            cell(episode_number),
-            cell(air_date)
-        )),
-        _ => Value::Null,
+fn write_availability_table(
+    writer: &mut impl Write,
+    envelope: &OperationEnvelope<SeasonAvailability>,
+) -> io::Result<()> {
+    let operation = Value::String(envelope.operation.clone());
+    let request_id = Value::String(envelope.request_id.clone());
+    let status = Value::String(if envelope.ok { "ok" } else { "error" }.to_owned());
+    let summary = Value::String(envelope.summary.text.clone());
+    metadata_row(writer, "OPERATION", Some(&operation))?;
+    metadata_row(writer, "REQUEST ID", Some(&request_id))?;
+    metadata_row(writer, "STATUS", Some(&status))?;
+    metadata_row(writer, "SUMMARY", Some(&summary))?;
+
+    if !envelope.ok {
+        let error = envelope
+            .error
+            .as_ref()
+            .map(|error| serde_json::to_value(&error.code).map_err(io::Error::other))
+            .transpose()?;
+        metadata_row(writer, "ERROR", error.as_ref())?;
+        return Ok(());
+    }
+
+    let Some(data) = envelope.data.as_ref() else {
+        return Ok(());
     };
+    let next_airing = data
+        .next_airing
+        .as_ref()
+        .and_then(|episode| {
+            episode.air_date.as_ref().map(|air_date| {
+                Value::String(format!("E{} {air_date}", episode.episode_number))
+            })
+        })
+        .unwrap_or(Value::Null);
     let values = [
-        cell(data.pointer("/series/title").unwrap_or(&missing)),
-        cell(data.get("season").unwrap_or(&missing)),
-        cell(data.get("in_library").unwrap_or(&missing)),
-        cell(data.pointer("/aired/status").unwrap_or(&missing)),
-        cell(data.pointer("/announced/status").unwrap_or(&missing)),
-        cell(
-            data.pointer("/announced/available_count")
-                .unwrap_or(&missing),
-        ),
-        cell(
-            data.pointer("/announced/expected_count")
-                .unwrap_or(&missing),
-        ),
+        cell(&Value::String(data.series.title.clone())),
+        cell(&Value::from(data.season)),
+        cell(&Value::Bool(data.in_library)),
+        cell(&Value::String(
+            completeness_status(data.aired.status).to_owned(),
+        )),
+        cell(&Value::String(
+            completeness_status(data.announced.status).to_owned(),
+        )),
+        cell(&Value::from(data.announced.available_count)),
+        cell(&Value::from(data.announced.expected_count)),
         cell(&next_airing),
     ];
 
@@ -117,6 +143,14 @@ fn write_availability_table(writer: &mut impl Write, envelope: &Value) -> io::Re
     )?;
     writer.write_all(b"------|------|------|------|------|------|------|------\n")?;
     writeln!(writer, "{}", values.join(" | "))
+}
+
+fn completeness_status(status: CompletenessStatus) -> &'static str {
+    match status {
+        CompletenessStatus::Complete => "complete",
+        CompletenessStatus::Incomplete => "incomplete",
+        CompletenessStatus::Unknown => "unknown",
+    }
 }
 
 fn metadata_row(writer: &mut impl Write, label: &str, value: Option<&Value>) -> io::Result<()> {

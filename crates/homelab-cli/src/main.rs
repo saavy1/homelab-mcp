@@ -8,7 +8,8 @@ use args::{
 use clap::{Parser, error::ErrorKind};
 use homelab_api_model::{
     CreateMediaRequest, DeleteDownloadQuery, HealthStatus, ItemDetailsQuery, ListDownloadsQuery,
-    ListRequestsQuery, MediaHealth, OperationEnvelope, SearchMediaQuery, SeasonAvailabilityQuery,
+    ListRequestsQuery, MediaHealth, OperationEnvelope, SearchMediaQuery, SeasonAvailability,
+    SeasonAvailabilityQuery,
 };
 use homelab_client::{ClientError, HomelabClient};
 use serde::Serialize;
@@ -299,7 +300,7 @@ async fn dispatch(
                     request_id,
                     output,
                 ),
-                LibraryCommand::Availability { media_id, season } => complete(
+                LibraryCommand::Availability { media_id, season } => complete_availability(
                     client
                         .media()
                         .season_availability(
@@ -307,8 +308,6 @@ async fn dispatch(
                             &SeasonAvailabilityQuery { media_id, season },
                         )
                         .await,
-                    "media.library.availability",
-                    "read",
                     request_id,
                     output,
                 ),
@@ -343,6 +342,30 @@ fn complete<T: Serialize>(
             }
         }
         Err(error) => finish_error(error, operation, risk, request_id, output),
+    }
+}
+
+fn complete_availability(
+    result: Result<OperationEnvelope<SeasonAvailability>, ClientError>,
+    request_id: &str,
+    output: OutputFormat,
+) -> i32 {
+    match result {
+        Ok(envelope) => {
+            let code = success_exit(&envelope);
+            if render::availability_envelope(&envelope, output).is_ok() {
+                code
+            } else {
+                EXIT_INTERNAL
+            }
+        }
+        Err(error) => finish_error(
+            error,
+            "media.library.availability",
+            "read",
+            request_id,
+            output,
+        ),
     }
 }
 

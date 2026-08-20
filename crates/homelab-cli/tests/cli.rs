@@ -25,6 +25,7 @@ enum Mode {
     Incompatible,
     ManySearch,
     ManyAvailability,
+    NoNextAiring,
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +133,7 @@ async fn mock_handler(State(state): State<MockState>, request: Request) -> Respo
             &state.mode,
             &method,
             path,
+            &uri,
             request_id.as_deref().unwrap_or("server-request"),
         )
     };
@@ -187,6 +189,7 @@ fn normal_response(
     mode: &Mode,
     method: &Method,
     path: &str,
+    uri: &str,
     request_id: &str,
 ) -> (StatusCode, Value) {
     let operation = operation_for(method, path);
@@ -219,6 +222,12 @@ fn normal_response(
         }
         (&Method::GET, "/api/v1/media/library/availability") => {
             let many = matches!(mode, Mode::ManyAvailability);
+            let season = uri
+                .split_once('?')
+                .map(|(_, query)| query)
+                .and_then(|query| query.split('&').find_map(|field| field.strip_prefix("season=")))
+                .and_then(|season| season.parse::<u32>().ok())
+                .unwrap_or(3);
             json!({
                 "series": {
                     "media_id": "60625",
@@ -229,7 +238,7 @@ fn normal_response(
                         "Rick and Morty"
                     }
                 },
-                "season": 3,
+                "season": season,
                 "as_of": "2026-08-19",
                 "in_library": true,
                 "aired": {
@@ -245,13 +254,17 @@ fn normal_response(
                     "missing_count": 18
                 },
                 "unknown_air_date_count": 0,
-                "next_airing": {
-                    "episode_id": "326",
-                    "episode_number": 26,
-                    "title": "Next Episode Must Stay Hidden",
-                    "air_date": "2026-08-26",
-                    "release_status": "future",
-                    "presence": "missing"
+                "next_airing": if matches!(mode, Mode::NoNextAiring) {
+                    Value::Null
+                } else {
+                    json!({
+                        "episode_id": "326",
+                        "episode_number": 26,
+                        "title": "Next Episode Must Stay Hidden",
+                        "air_date": "2026-08-26",
+                        "release_status": "future",
+                        "presence": "missing"
+                    })
                 },
                 "episodes": if many {
                     Value::Array((1..=25).map(|episode_number| json!({
@@ -477,6 +490,61 @@ async fn availability_emits_exact_json_and_get_query() {
         body["request_id"].as_str()
     );
     assert!(requests[0].body.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_forwards_specials_season_zero() {
+    let api = MockApi::spawn(Mode::Normal).await;
+    let body = assert_json_success(&run(
+        &api,
+        &[
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "0",
+        ],
+    ));
+
+    assert_eq!(body["data"]["season"], 0);
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, Method::GET);
+    assert_eq!(
+        requests[0].uri,
+        "/api/v1/media/library/availability?media_id=60625&season=0"
+    );
+}
+
+#[test]
+fn availability_local_error_has_exact_operation_risk_request_id_and_exit() {
+    let output = Command::new(env!("CARGO_BIN_EXE_homelab"))
+        .args([
+            "--request-id",
+            "availability-local-error",
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "3",
+        ])
+        .env_remove("HOMELAB_API_URL")
+        .env_remove("RUST_LOG")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let body: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["operation"], "media.library.availability");
+    assert_eq!(body["risk"], "read");
+    assert_eq!(body["request_id"], "availability-local-error");
+    assert_eq!(body["error"]["code"], "validation");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -758,6 +826,40 @@ async fn availability_table_is_one_bounded_redacted_summary_row() {
         assert!(!text.contains(forbidden), "leaked {forbidden}: {text}");
     }
     assert!(text.lines().count() <= 8, "table was not bounded: {text}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_table_uses_dash_when_next_airing_is_null() {
+    let api = MockApi::spawn(Mode::NoNextAiring).await;
+    let output = run(
+        &api,
+        &[
+            "--output",
+            "table",
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "3",
+        ],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let data_row = text
+        .lines()
+        .find(|line| line.starts_with("Rick and Morty |"))
+        .unwrap();
+    let cells = data_row.split(" | ").collect::<Vec<_>>();
+    assert_eq!(cells.len(), 8);
+    assert_eq!(cells[7], "-");
 }
 
 #[tokio::test(flavor = "multi_thread")]
