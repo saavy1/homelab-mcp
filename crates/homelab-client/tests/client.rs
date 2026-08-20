@@ -10,7 +10,7 @@ use homelab_api_model::{
     API_MAJOR, ActiveSession, ApiVersion, Capabilities, CreateMediaRequest, DeleteDownloadQuery,
     DownloadItem, ItemDetailsQuery, LibraryStatus, ListDownloadsQuery, ListRequestsQuery,
     MediaHealth, MediaOperation, MediaRequest, MediaSearchItem, MediaType, OperationEnvelope,
-    RiskLevel, SearchMediaQuery,
+    RiskLevel, SearchMediaQuery, SeasonAvailability, SeasonAvailabilityQuery,
 };
 use homelab_client::{ClientError, HomelabClient};
 use homelab_core::ExecutionProvenance;
@@ -287,26 +287,90 @@ async fn non_json_error_body_is_redacted_from_decode_error() {
     assert!(!format!("{error:?}").contains(SECRET_BODY));
 }
 
+#[tokio::test]
+async fn malformed_season_availability_envelope_is_redacted_from_decode_error() {
+    const SECRET_DATA: &str = "jellyfin token=season-secret";
+    let app = Router::new().route(
+        "/api/v1/media/library/availability",
+        get(|| async {
+            let mut response = Json(json!({
+                "ok": true,
+                "operation": "media.library.availability",
+                "request_id": "server-malformed",
+                "risk": "read",
+                "summary": {"text": "malformed response"},
+                "data": SECRET_DATA,
+                "issues": [],
+                "provenance": {
+                    "service": "test-api",
+                    "timestamp": "2026-08-19T00:00:00Z"
+                }
+            }))
+            .into_response();
+            response
+                .headers_mut()
+                .insert(REQUEST_ID_HEADER, "server-malformed".parse().unwrap());
+            response
+        }),
+    );
+    let mut base_url = spawn(app).await;
+    base_url.set_path("/api/v1");
+    let client = HomelabClient::new(base_url, reqwest::Client::new()).unwrap();
+
+    let error = client
+        .media()
+        .season_availability(
+            "malformed-season",
+            &SeasonAvailabilityQuery {
+                media_id: 60625,
+                season: 3,
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        &error,
+        ClientError::Decode {
+            status: StatusCode::OK,
+            request_id: Some(request_id),
+        } if request_id == "server-malformed"
+    ));
+    assert!(!format!("{error}").contains(SECRET_DATA));
+    assert!(!format!("{error:?}").contains(SECRET_DATA));
+}
+
 #[derive(Clone, Debug)]
 struct SeenRequest {
     method: Method,
     uri: String,
+    path: String,
+    query: Option<String>,
+    request_id: Option<String>,
     body: Option<Value>,
 }
 
 type Seen = Arc<Mutex<Vec<SeenRequest>>>;
 
 async fn fixed_api(State(seen): State<Seen>, request: Request) -> Response {
-    assert_eq!(request.headers()[REQUEST_ID_HEADER], "typed-contract");
     assert_eq!(request.headers()[API_MAJOR_HEADER], "1");
+    let request_id = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let method = request.method().clone();
     let uri = request.uri().to_string();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().map(str::to_owned);
     let bytes = to_bytes(request.into_body(), 65_536).await.unwrap();
     let body = (!bytes.is_empty()).then(|| serde_json::from_slice(&bytes).unwrap());
     seen.lock().push(SeenRequest {
         method: method.clone(),
         uri,
+        path: path.clone(),
+        query,
+        request_id: request_id.clone(),
         body,
     });
 
@@ -357,6 +421,34 @@ async fn fixed_api(State(seen): State<Seen>, request: Request) -> Response {
             "media.library.status",
             json!({"item_count": 10, "movie_count": 6, "series_count": 4}),
         ),
+        (Method::GET, "/api/v1/media/library/availability") => (
+            "media.library.availability",
+            json!({
+                "series": {
+                    "media_id": "60625",
+                    "jellyfin_id": "series-60625",
+                    "title": "Rick and Morty"
+                },
+                "season": 3,
+                "as_of": "2026-08-19",
+                "in_library": true,
+                "aired": {
+                    "status": "incomplete",
+                    "expected_count": 10,
+                    "available_count": 9,
+                    "missing_count": 1
+                },
+                "announced": {
+                    "status": "complete",
+                    "expected_count": 10,
+                    "available_count": 10,
+                    "missing_count": 0
+                },
+                "unknown_air_date_count": 0,
+                "next_airing": null,
+                "episodes": null
+            }),
+        ),
         (Method::POST, "/api/v1/media/library/refresh") => (
             "media.library.refresh",
             json!({"service": "jellyfin", "operation": "refresh", "affected_id": null}),
@@ -367,7 +459,7 @@ async fn fixed_api(State(seen): State<Seen>, request: Request) -> Response {
     Json(json!({
         "ok": true,
         "operation": operation,
-        "request_id": "typed-contract",
+        "request_id": request_id,
         "risk": "read",
         "summary": {"text": "test response"},
         "data": data,
@@ -427,6 +519,31 @@ async fn every_operation_uses_a_typed_fixed_route() {
         .await
         .unwrap();
     let _: OperationEnvelope<LibraryStatus> = media.library_status("typed-contract").await.unwrap();
+    let query = SeasonAvailabilityQuery {
+        media_id: 60625,
+        season: 3,
+    };
+    let availability: OperationEnvelope<SeasonAvailability> = media
+        .season_availability("req-season", &query)
+        .await
+        .unwrap();
+    assert_eq!(availability.operation, "media.library.availability");
+    let availability = availability.data.unwrap();
+    assert_eq!(availability.series.media_id, "60625");
+    assert_eq!(availability.series.jellyfin_id.as_deref(), Some("series-60625"));
+    assert_eq!(availability.series.title, "Rick and Morty");
+    assert_eq!(availability.season, 3);
+    assert_eq!(availability.as_of.to_string(), "2026-08-19");
+    assert!(availability.in_library);
+    assert_eq!(availability.aired.expected_count, 10);
+    assert_eq!(availability.aired.available_count, 9);
+    assert_eq!(availability.aired.missing_count, 1);
+    assert_eq!(availability.announced.expected_count, 10);
+    assert_eq!(availability.announced.available_count, 10);
+    assert_eq!(availability.announced.missing_count, 0);
+    assert_eq!(availability.unknown_air_date_count, 0);
+    assert!(availability.next_airing.is_none());
+    assert!(availability.episodes.is_none());
     let _: OperationEnvelope<Vec<ActiveSession>> =
         media.active_sessions("typed-contract").await.unwrap();
     let _: OperationEnvelope<MediaRequest> = media
@@ -480,6 +597,10 @@ async fn every_operation_uses_a_typed_fixed_route() {
             (Method::GET, "/api/v1/media/requests?status=pending+review"),
             (Method::GET, "/api/v1/media/downloads?status=downloading"),
             (Method::GET, "/api/v1/media/library/status"),
+            (
+                Method::GET,
+                "/api/v1/media/library/availability?media_id=60625&season=3"
+            ),
             (Method::GET, "/api/v1/media/sessions"),
             (Method::GET, "/api/v1/capabilities"),
             (Method::POST, "/api/v1/media/requests"),
@@ -496,12 +617,19 @@ async fn every_operation_uses_a_typed_fixed_route() {
         ]
     );
     assert_eq!(
-        seen[8].body,
+        seen[9].body,
         Some(json!({"media_id": 100, "media_type": "movie"}))
     );
     assert!(
         seen.iter()
             .enumerate()
-            .all(|(index, request)| index == 8 || request.body.is_none())
+            .all(|(index, request)| index == 9 || request.body.is_none())
     );
+    let request = seen
+        .iter()
+        .find(|request| request.path == "/api/v1/media/library/availability")
+        .unwrap();
+    assert_eq!(request.method, Method::GET);
+    assert_eq!(request.query.as_deref(), Some("media_id=60625&season=3"));
+    assert_eq!(request.request_id.as_deref(), Some("req-season"));
 }

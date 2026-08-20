@@ -3,6 +3,7 @@ use homelab_api_model::{
     ActiveSession, CreateMediaRequest, DeleteDownloadQuery, DownloadItem, ItemDetailsQuery,
     LibraryStatus, ListDownloadsQuery, ListRequestsQuery, MediaHealth, MediaOperation,
     MediaRequest, MediaSearchItem, MediaType, OperationEnvelope, SearchMediaQuery,
+    SeasonAvailability, SeasonAvailabilityQuery,
 };
 use reqwest::Method;
 
@@ -191,6 +192,22 @@ impl<'a> MediaClient<'a> {
         request_id: &str,
     ) -> Result<OperationEnvelope<LibraryStatus>, ClientError> {
         let url = self.client.route(&["media", "library", "status"])?;
+        self.client
+            .execute(self.client.http.request(Method::GET, url), request_id)
+            .await
+    }
+
+    pub async fn season_availability(
+        &self,
+        request_id: &str,
+        query: &SeasonAvailabilityQuery,
+    ) -> Result<OperationEnvelope<SeasonAvailability>, ClientError> {
+        let mut url = self
+            .client
+            .route(&["media", "library", "availability"])?;
+        url.query_pairs_mut()
+            .append_pair("media_id", &query.media_id.to_string())
+            .append_pair("season", &query.season.to_string());
         self.client
             .execute(self.client.http.request(Method::GET, url), request_id)
             .await
