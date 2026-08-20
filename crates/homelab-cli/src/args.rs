@@ -47,6 +47,13 @@ fn parse_correlation_id(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
+fn parse_catalog_id(value: &str) -> Result<String, String> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("item ID must be a non-empty numeric catalog identifier".to_owned());
+    }
+    Ok(value.to_owned())
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Capabilities,
@@ -92,8 +99,10 @@ pub enum MediaCommand {
 #[derive(Debug, Subcommand)]
 pub enum ItemCommand {
     Show {
-        #[arg(long, value_parser = NonEmptyStringValueParser::new())]
+        #[arg(long, value_parser = parse_catalog_id)]
         item_id: String,
+        #[arg(long, value_enum)]
+        media_type: MediaTypeArg,
     },
 }
 

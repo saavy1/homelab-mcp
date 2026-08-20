@@ -118,18 +118,23 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
     if path == "/Sessions" {
         return axum::Json(json!([{"Id": "session-1", "UserName": "saavy"}])).into_response();
     }
-    if let Some(id) = path.strip_prefix("/Items/") {
+    if let Some((media_type, id)) = path
+        .strip_prefix("/api/v1/")
+        .and_then(|rest| rest.split_once('/'))
+        .filter(|(media_type, _)| matches!(*media_type, "movie" | "tv"))
+    {
         return match id {
-            "missing" => (StatusCode::NOT_FOUND, "not found").into_response(),
-            "unavailable" => {
+            "404" => (StatusCode::NOT_FOUND, "not found").into_response(),
+            "500" => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "private backend failure").into_response()
             }
-            "invalid" => axum::Json(json!({})).into_response(),
+            "999" => axum::Json(json!({})).into_response(),
             _ => axum::Json(json!({
-                "Id": id,
-                "Type": "Movie",
-                "Name": "Alien",
-                "ProductionYear": 1979
+                "id": id,
+                "mediaType": media_type,
+                "title": if media_type == "tv" { "Rick and Morty" } else { "Alien" },
+                "releaseDate": "1979-05-25",
+                "firstAirDate": "2013-12-02"
             }))
             .into_response(),
         };
@@ -205,7 +210,11 @@ async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
         (Method::GET, "/api/v1/capabilities", None),
         (Method::GET, "/api/v1/health", None),
         (Method::GET, "/api/v1/media/search?query=Alien", None),
-        (Method::GET, "/api/v1/media/items/item-1", None),
+        (
+            Method::GET,
+            "/api/v1/media/items/60625?media_type=tv",
+            None,
+        ),
         (
             Method::POST,
             "/api/v1/media/requests",
@@ -349,6 +358,58 @@ async fn bodyless_mutations_reject_caller_supplied_fields() {
 }
 
 #[tokio::test]
+async fn item_details_requires_exact_media_type_query_and_selects_catalog_endpoint() {
+    let (app, backend) = app().await;
+    for (id, media_type, expected_path) in [
+        ("60625", "tv", "/api/v1/tv/60625"),
+        ("100", "movie", "/api/v1/movie/100"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                request(
+                    Method::GET,
+                    &format!("/api/v1/media/items/{id}?media_type={media_type}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["data"]["id"], id);
+        assert_eq!(body["data"]["media_type"], media_type);
+        let expected_call = format!("GET {expected_path}");
+        assert_eq!(
+            backend.calls.lock().last().map(String::as_str),
+            Some(expected_call.as_str())
+        );
+    }
+
+    for uri in [
+        "/api/v1/media/items/60625",
+        "/api/v1/media/items/60625?media_type=series",
+        "/api/v1/media/items/60625?media_type=tv&source=jellyfin",
+        "/api/v1/media/items/not-numeric?media_type=tv",
+    ] {
+        let calls_before = backend.calls.lock().len();
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{uri}"
+        );
+        assert_eq!(json_body(response).await["error"]["code"], "validation");
+        assert_eq!(backend.calls.lock().len(), calls_before, "{uri}");
+    }
+}
+
+#[tokio::test]
 async fn query_routes_reject_unknown_fields_and_oversized_values() {
     let (app, backend) = app().await;
     for uri in [
@@ -383,7 +444,10 @@ async fn query_routes_reject_unknown_fields_and_oversized_values() {
 async fn identifiers_reject_path_syntax_before_backend_calls() {
     let (app, backend) = app().await;
     for (method, uri) in [
-        (Method::GET, "/api/v1/media/items/%2E%2E"),
+        (
+            Method::GET,
+            "/api/v1/media/items/%2E%2E?media_type=tv",
+        ),
         (
             Method::POST,
             "/api/v1/media/requests/http%3A%2F%2Fattacker/approve",
@@ -440,18 +504,17 @@ async fn upstream_secret_body_and_credentials_are_not_returned() {
 async fn stable_error_codes_map_to_documented_http_statuses() {
     let (app, _) = app().await;
     for (id, status, code) in [
-        ("missing", StatusCode::NOT_FOUND, "not_found"),
-        (
-            "unavailable",
-            StatusCode::SERVICE_UNAVAILABLE,
-            "unavailable",
-        ),
-        ("invalid", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+        ("404", StatusCode::NOT_FOUND, "not_found"),
+        ("500", StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        ("999", StatusCode::INTERNAL_SERVER_ERROR, "internal"),
     ] {
         let response = app
             .clone()
             .oneshot(
-                request(Method::GET, &format!("/api/v1/media/items/{id}"))
+                request(
+                    Method::GET,
+                    &format!("/api/v1/media/items/{id}?media_type=tv"),
+                )
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -467,7 +530,12 @@ async fn stable_error_codes_map_to_documented_http_statuses() {
 #[tokio::test]
 async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
     for (path, backend_path, expected_code, retryable) in [
-        ("/api/v1/media/items/slow", "/Items/slow", "timeout", true),
+        (
+            "/api/v1/media/items/4080?media_type=tv",
+            "/api/v1/tv/4080",
+            "timeout",
+            true,
+        ),
         (
             "/api/v1/media/library/refresh",
             "/Library/Refresh",

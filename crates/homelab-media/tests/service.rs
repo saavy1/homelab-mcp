@@ -193,6 +193,43 @@ async fn mutation_rate_limit_is_not_retryable() {
 }
 
 #[tokio::test]
+async fn item_details_uses_jellyseerr_catalog_and_never_jellyfin() {
+    let jellyseerr = Router::new().route(
+        "/api/v1/tv/{id}",
+        get(|Path(id): Path<String>| async move {
+            assert_eq!(id, "60625");
+            common::json_response(json!({
+                "id": 60625,
+                "mediaType": "tv",
+                "name": "Rick and Morty",
+                "firstAirDate": "2013-12-02"
+            }))
+        }),
+    );
+    let jellyfin_calls = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::clone(&jellyfin_calls);
+    let jellyfin = Router::new().fallback(move || {
+        calls.fetch_add(1, Ordering::SeqCst);
+        async { StatusCode::INTERNAL_SERVER_ERROR }
+    });
+    let jellyseerr_url = common::spawn_mock_app(jellyseerr).await;
+    let jellyfin_url = common::spawn_mock_app(jellyfin).await;
+    let service = service(config(
+        jellyseerr_url.clone(),
+        jellyseerr_url,
+        jellyfin_url,
+    ));
+
+    let result = service
+        .item_details("req-item", "60625", MediaType::Tv)
+        .await
+        .unwrap();
+
+    assert_eq!(result.data.unwrap().id, "60625");
+    assert_eq!(jellyfin_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
 async fn blank_ids_fail_locally_at_the_service_boundary() {
     let requests = Arc::new(AtomicUsize::new(0));
     let request_count = Arc::clone(&requests);
@@ -229,7 +266,7 @@ async fn blank_ids_fail_locally_at_the_service_boundary() {
     );
     assert_eq!(
         service
-            .item_details("r", "\n")
+            .item_details("r", "\n", MediaType::Tv)
             .await
             .unwrap_err()
             .error_code(),
@@ -269,9 +306,13 @@ fn operations_app() -> Router {
         .route("/Library/Refresh", post(|| async { StatusCode::NO_CONTENT }))
         .route("/Sessions", get(|| async { common::json_response(json!([])) }))
         .route(
-            "/Items/{id}",
+            "/api/v1/movie/{id}",
             get(|Path(id): Path<String>| async move {
-                common::json_response(json!({"Id": id, "Name": "Alien", "Type": "Movie"}))
+                common::json_response(json!({
+                    "id": id,
+                    "mediaType": "movie",
+                    "title": "Alien"
+                }))
             }),
         )
 }
@@ -355,7 +396,10 @@ async fn service_uses_exact_operation_names_and_risk_levels() {
         (sessions.operation.as_str(), sessions.risk),
         ("media.sessions.list", RiskLevel::Read)
     );
-    let item = service.item_details("r15", "movie-1").await.unwrap();
+    let item = service
+        .item_details("r15", "1", MediaType::Movie)
+        .await
+        .unwrap();
     assert_eq!(
         (item.operation.as_str(), item.risk),
         ("media.items.show", RiskLevel::Read)

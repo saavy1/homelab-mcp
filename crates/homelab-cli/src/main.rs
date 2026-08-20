@@ -7,8 +7,8 @@ use args::{
 };
 use clap::{Parser, error::ErrorKind};
 use homelab_api_model::{
-    CreateMediaRequest, DeleteDownloadQuery, HealthStatus, ListDownloadsQuery, ListRequestsQuery,
-    MediaHealth, OperationEnvelope, SearchMediaQuery,
+    CreateMediaRequest, DeleteDownloadQuery, HealthStatus, ItemDetailsQuery, ListDownloadsQuery,
+    ListRequestsQuery, MediaHealth, OperationEnvelope, SearchMediaQuery,
 };
 use homelab_client::{ClientError, HomelabClient};
 use serde::Serialize;
@@ -148,8 +148,20 @@ async fn dispatch(
                 output,
             ),
             MediaCommand::Item { command } => match command {
-                ItemCommand::Show { item_id } => complete(
-                    client.media().item_details(request_id, &item_id).await,
+                ItemCommand::Show {
+                    item_id,
+                    media_type,
+                } => complete(
+                    client
+                        .media()
+                        .item_details(
+                            request_id,
+                            &item_id,
+                            &ItemDetailsQuery {
+                                media_type: media_type.into(),
+                            },
+                        )
+                        .await,
                     "media.items.show",
                     "read",
                     request_id,

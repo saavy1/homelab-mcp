@@ -34,6 +34,25 @@ impl JellyseerrClient {
             .collect())
     }
 
+    pub async fn item_details(
+        &self,
+        media_type: MediaType,
+        item_id: &str,
+    ) -> Result<MediaSearchItem, MediaError> {
+        require_catalog_id(item_id)?;
+        let value = self
+            .send(
+                Method::GET,
+                "item_details",
+                &format!("/api/v1/{}/{item_id}", media_type_text(media_type)),
+                None,
+                false,
+            )
+            .await?;
+        normalize_catalog_item(&value, media_type)
+            .ok_or_else(|| MediaError::serialization("jellyseerr", "item_details"))
+    }
+
     pub async fn request_media(
         &self,
         media_type: MediaType,
@@ -185,6 +204,16 @@ fn require_id(value: &str, field: &str) -> Result<(), MediaError> {
     }
 }
 
+fn require_catalog_id(value: &str) -> Result<(), MediaError> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        Err(MediaError::Validation(
+            "item_id must be a non-empty numeric catalog identifier".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn media_type_text(media_type: MediaType) -> &'static str {
     match media_type {
         MediaType::Movie => "movie",
@@ -209,11 +238,15 @@ fn scalar_string(value: &Value) -> Option<String> {
 }
 
 fn normalize_search_result(value: &Value) -> Option<MediaSearchItem> {
-    let id = value.get("id").and_then(scalar_string)?;
     let media_type = value
         .get("mediaType")
         .and_then(Value::as_str)
         .and_then(parse_media_type)?;
+    normalize_catalog_item(value, media_type)
+}
+
+fn normalize_catalog_item(value: &Value, media_type: MediaType) -> Option<MediaSearchItem> {
+    let id = value.get("id").and_then(scalar_string)?;
     let title = value
         .get("title")
         .or_else(|| value.get("name"))

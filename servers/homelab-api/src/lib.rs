@@ -178,7 +178,7 @@ fn route_metadata<'a>(
         return ("media.search", RiskLevel::Read, "jellyseerr", None);
     }
     if let Some(id) = path.strip_prefix("/api/v1/media/items/") {
-        return ("media.items.show", RiskLevel::Read, "jellyfin", Some(id));
+        return ("media.items.show", RiskLevel::Read, "jellyseerr", Some(id));
     }
     ("request", RiskLevel::Read, "homelab-api", None)
 }

@@ -8,9 +8,9 @@ use axum::{
 };
 use homelab_api_model::{
     API_MAJOR, ActiveSession, ApiVersion, Capabilities, CreateMediaRequest, DeleteDownloadQuery,
-    DownloadItem, LibraryStatus, ListDownloadsQuery, ListRequestsQuery, MediaHealth,
-    MediaOperation, MediaRequest, MediaSearchItem, MediaType, OperationEnvelope, RiskLevel,
-    SearchMediaQuery,
+    DownloadItem, ItemDetailsQuery, LibraryStatus, ListDownloadsQuery, ListRequestsQuery,
+    MediaHealth, MediaOperation, MediaRequest, MediaSearchItem, MediaType, OperationEnvelope,
+    RiskLevel, SearchMediaQuery,
 };
 use homelab_client::{ClientError, HomelabClient};
 use homelab_core::ExecutionProvenance;
@@ -319,9 +319,9 @@ async fn fixed_api(State(seen): State<Seen>, request: Request) -> Response {
             ("media.health", json!({"status": "healthy", "backends": []}))
         }
         (Method::GET, "/api/v1/media/search") => ("media.search", json!([])),
-        (Method::GET, "/api/v1/media/items/item%2Fone") => (
+        (Method::GET, "/api/v1/media/items/60625") => (
             "media.items.show",
-            json!({"id": "item/one", "media_type": "movie", "title": "Alien", "year": 1979, "status": null}),
+            json!({"id": "60625", "media_type": "tv", "title": "Rick and Morty", "year": 2013, "status": null}),
         ),
         (Method::GET, "/api/v1/media/requests") => ("media.requests.list", json!([])),
         (Method::POST, "/api/v1/media/requests") => (
@@ -399,7 +399,13 @@ async fn every_operation_uses_a_typed_fixed_route() {
         .await
         .unwrap();
     let _: OperationEnvelope<MediaSearchItem> = media
-        .item_details("typed-contract", "item/one")
+        .item_details(
+            "typed-contract",
+            "60625",
+            &ItemDetailsQuery {
+                media_type: MediaType::Tv,
+            },
+        )
         .await
         .unwrap();
     let _: OperationEnvelope<Vec<MediaRequest>> = media
@@ -470,7 +476,10 @@ async fn every_operation_uses_a_typed_fixed_route() {
         vec![
             (Method::GET, "/api/v1/health"),
             (Method::GET, "/api/v1/media/search?query=Witch+Hat"),
-            (Method::GET, "/api/v1/media/items/item%2Fone"),
+            (
+                Method::GET,
+                "/api/v1/media/items/60625?media_type=tv"
+            ),
             (Method::GET, "/api/v1/media/requests?status=pending+review"),
             (Method::GET, "/api/v1/media/downloads?status=downloading"),
             (Method::GET, "/api/v1/media/library/status"),

@@ -4,7 +4,8 @@ use crate::{
 };
 use homelab_api_model::{
     ActiveSession, BackendHealth, CreateMediaRequest, DownloadItem, HealthStatus, LibraryStatus,
-    MediaHealth, MediaOperation, MediaRequest, MediaSearchItem, OperationEnvelope, RiskLevel,
+    MediaHealth, MediaOperation, MediaRequest, MediaSearchItem, MediaType, OperationEnvelope,
+    RiskLevel,
 };
 use homelab_core::{ExecutionProvenance, ValidationIssue};
 
@@ -277,8 +278,9 @@ impl MediaService {
         &self,
         request_id: &str,
         item_id: &str,
+        media_type: MediaType,
     ) -> Result<OperationEnvelope<MediaSearchItem>, MediaError> {
-        let item = self.jellyfin.get_item_details(item_id).await?;
+        let item = self.jellyseerr.item_details(media_type, item_id).await?;
         Ok(success(
             "media.items.show",
             request_id,

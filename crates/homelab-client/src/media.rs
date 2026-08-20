@@ -1,8 +1,8 @@
 use crate::{ClientError, HomelabClient};
 use homelab_api_model::{
-    ActiveSession, CreateMediaRequest, DeleteDownloadQuery, DownloadItem, LibraryStatus,
-    ListDownloadsQuery, ListRequestsQuery, MediaHealth, MediaOperation, MediaRequest,
-    MediaSearchItem, OperationEnvelope, SearchMediaQuery,
+    ActiveSession, CreateMediaRequest, DeleteDownloadQuery, DownloadItem, ItemDetailsQuery,
+    LibraryStatus, ListDownloadsQuery, ListRequestsQuery, MediaHealth, MediaOperation, MediaRequest,
+    MediaSearchItem, MediaType, OperationEnvelope, SearchMediaQuery,
 };
 use reqwest::Method;
 
@@ -41,8 +41,16 @@ impl<'a> MediaClient<'a> {
         &self,
         request_id: &str,
         item_id: &str,
+        query: &ItemDetailsQuery,
     ) -> Result<OperationEnvelope<MediaSearchItem>, ClientError> {
-        let url = self.client.route(&["media", "items", item_id])?;
+        let mut url = self.client.route(&["media", "items", item_id])?;
+        url.query_pairs_mut().append_pair(
+            "media_type",
+            match query.media_type {
+                MediaType::Movie => "movie",
+                MediaType::Tv => "tv",
+            },
+        );
         self.client
             .execute(self.client.http.request(Method::GET, url), request_id)
             .await

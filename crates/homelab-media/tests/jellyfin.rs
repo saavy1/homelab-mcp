@@ -2,15 +2,11 @@ mod common;
 
 use axum::{
     Router,
-    extract::Path,
     http::HeaderMap,
     routing::{get, post},
 };
-use homelab_api_model::MediaType;
 use homelab_media::{clients::jellyfin::JellyfinClient, config::ServiceConfig};
 use serde_json::json;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn client(base_url: String, key: &str) -> JellyfinClient {
     JellyfinClient::new(
@@ -87,38 +83,6 @@ async fn active_sessions_are_normalized_without_raw_source() {
     assert!(!json.contains("source"));
 }
 
-#[tokio::test]
-async fn item_details_are_typed_and_blank_id_fails_locally() {
-    let requests = Arc::new(AtomicUsize::new(0));
-    let request_count = Arc::clone(&requests);
-    let app = Router::new().route(
-        "/Items/{id}",
-        get(move |Path(id): Path<String>| {
-            request_count.fetch_add(1, Ordering::SeqCst);
-            async move {
-                common::json_response(json!({
-                    "Id": id,
-                    "Name": "Alien",
-                    "Type": "Movie",
-                    "ProductionYear": 1979,
-                    "ProviderIds": {"ApiKey": "must-not-escape"}
-                }))
-            }
-        }),
-    );
-    let client = client(common::spawn_mock_app(app).await, "key");
-
-    let details = client.get_item_details("movie-123").await.unwrap();
-    let error = client.get_item_details("  ").await.unwrap_err();
-
-    assert_eq!(details.id, "movie-123");
-    assert_eq!(details.title, "Alien");
-    assert_eq!(details.media_type, MediaType::Movie);
-    assert_eq!(details.year, Some(1979));
-    assert!(!serde_json::to_string(&details).unwrap().contains("ApiKey"));
-    assert!(matches!(error, homelab_media::MediaError::Validation(_)));
-    assert_eq!(requests.load(Ordering::SeqCst), 1);
-}
 
 #[tokio::test]
 async fn authorization_body_and_token_are_redacted_from_decode_errors() {

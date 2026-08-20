@@ -198,7 +198,7 @@ fn normal_response(
                     "year": 2000 + index, "status": "available", "api_key": "do-not-print"
                 })).collect())
             } else {
-                json!([{"id": "100", "media_type": "movie", "title": "Alien", "year": 1979, "status": "available"}])
+                json!([{"id": "60625", "media_type": "tv", "title": "Rick and Morty", "year": 2013, "status": "available"}])
             }
         }
         (&Method::POST, "/api/v1/media/requests") => json!({
@@ -217,7 +217,7 @@ fn normal_response(
             json!([{"id": "session-1", "user_name": "viewer", "item_name": "Alien"}])
         }
         (&Method::GET, _) if path.starts_with("/api/v1/media/items/") => json!({
-            "id": "item-1", "media_type": "movie", "title": "Alien", "year": 1979, "status": "available"
+            "id": "60625", "media_type": "tv", "title": "Rick and Morty", "year": 2013, "status": "available"
         }),
         _ => json!({"service": "mock", "operation": operation, "affected_id": "target-1"}),
     };
@@ -309,7 +309,15 @@ async fn the_complete_curated_command_tree_is_available() {
     let api = MockApi::spawn(Mode::Normal).await;
     for args in [
         vec!["media", "health"],
-        vec!["media", "item", "show", "--item-id", "item-1"],
+        vec![
+            "media",
+            "item",
+            "show",
+            "--item-id",
+            "60625",
+            "--media-type",
+            "tv",
+        ],
         vec!["media", "requests", "list", "--status", "pending"],
         vec!["media", "requests", "approve", "--request-id", "media-1"],
         vec!["media", "requests", "decline", "--request-id", "media-1"],
@@ -324,12 +332,69 @@ async fn the_complete_curated_command_tree_is_available() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn search_result_id_and_type_are_accepted_by_item_show_with_exact_query() {
+    let api = MockApi::spawn(Mode::Normal).await;
+    let search = assert_json_success(&run(
+        &api,
+        &["media", "search", "--query", "Rick and Morty"],
+    ));
+    let item = &search["data"][0];
+    let item_id = item["id"].as_str().unwrap();
+    let media_type = item["media_type"].as_str().unwrap();
+
+    let shown = assert_json_success(&run(
+        &api,
+        &[
+            "media",
+            "item",
+            "show",
+            "--item-id",
+            item_id,
+            "--media-type",
+            media_type,
+        ],
+    ));
+
+    assert_eq!(shown["data"]["id"], "60625");
+    assert_eq!(shown["data"]["media_type"], "tv");
+    let requests = api.requests();
+    assert_eq!(requests[0].uri, "/api/v1/media/search?query=Rick+and+Morty");
+    assert_eq!(
+        requests[1].uri,
+        "/api/v1/media/items/60625?media_type=tv"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_arguments_exit_two_without_http_and_missing_config_is_structured() {
     let api = MockApi::spawn(Mode::Normal).await;
-    let invalid = run(&api, &["media", "search"]);
-    assert_eq!(invalid.status.code(), Some(2));
-    let invalid_json: Value = serde_json::from_slice(&invalid.stdout).unwrap();
-    assert_eq!(invalid_json["ok"], false);
+    for args in [
+        vec!["media", "search"],
+        vec!["media", "item", "show", "--item-id", "60625"],
+        vec![
+            "media",
+            "item",
+            "show",
+            "--item-id",
+            "60625",
+            "--media-type",
+            "series",
+        ],
+        vec![
+            "media",
+            "item",
+            "show",
+            "--item-id",
+            "not-numeric",
+            "--media-type",
+            "tv",
+        ],
+    ] {
+        let invalid = run(&api, &args);
+        assert_eq!(invalid.status.code(), Some(2), "{args:?}");
+        let invalid_json: Value = serde_json::from_slice(&invalid.stdout).unwrap();
+        assert_eq!(invalid_json["ok"], false);
+    }
     assert!(api.requests().is_empty());
 
     let missing = Command::new(env!("CARGO_BIN_EXE_homelab"))

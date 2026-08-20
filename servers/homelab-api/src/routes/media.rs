@@ -12,8 +12,8 @@ use axum::{
     response::Response,
 };
 use homelab_api_model::{
-    API_MAJOR, CreateMediaRequest, DeleteDownloadQuery, ListDownloadsQuery, ListRequestsQuery,
-    RiskLevel, SearchMediaQuery,
+    API_MAJOR, CreateMediaRequest, DeleteDownloadQuery, ItemDetailsQuery, ListDownloadsQuery,
+    ListRequestsQuery, RiskLevel, SearchMediaQuery,
 };
 use homelab_core::ErrorCode;
 use serde::de::DeserializeOwned;
@@ -62,12 +62,25 @@ pub(crate) async fn item_details(
     State(state): State<ApiState>,
     Extension(context): Extension<RequestContext>,
     Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
 ) -> Response {
-    let meta = OperationMeta::new("media.items.show", RiskLevel::Read, "jellyfin", Some(&id));
-    if let Err(message) = validate_id(&id) {
+    let meta = OperationMeta::new(
+        "media.items.show",
+        RiskLevel::Read,
+        "jellyseerr",
+        Some(&id),
+    );
+    if let Err(message) = validate_catalog_id(&id) {
         return validation_response(&context.request_id, meta, message);
     }
-    let result = state.media.item_details(&context.request_id, &id).await;
+    let query = match parse_query::<ItemDetailsQuery>(raw.as_deref(), &["media_type"]) {
+        Ok(query) => query,
+        Err(message) => return validation_response(&context.request_id, meta, message),
+    };
+    let result = state
+        .media
+        .item_details(&context.request_id, &id, query.media_type)
+        .await;
     service_response(&context.request_id, meta, result)
 }
 
@@ -477,6 +490,14 @@ fn validate_id(id: &str) -> Result<(), &'static str> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
     if id.is_empty() || id.len() > MAX_ID_LENGTH || !safe {
         Err("identifier must contain 1 to 256 safe identifier characters")
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_catalog_id(id: &str) -> Result<(), &'static str> {
+    if id.is_empty() || id.len() > MAX_ID_LENGTH || !id.bytes().all(|byte| byte.is_ascii_digit()) {
+        Err("item identifier must be a non-empty numeric catalog identifier")
     } else {
         Ok(())
     }

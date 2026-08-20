@@ -1,5 +1,5 @@
 use crate::{MediaError, config::ServiceConfig};
-use homelab_api_model::{ActiveSession, LibraryStatus, MediaOperation, MediaSearchItem, MediaType};
+use homelab_api_model::{ActiveSession, LibraryStatus, MediaOperation};
 use reqwest::{Client, Method};
 use serde_json::Value;
 
@@ -65,19 +65,6 @@ impl JellyfinClient {
             .collect())
     }
 
-    pub async fn get_item_details(&self, item_id: &str) -> Result<MediaSearchItem, MediaError> {
-        require_id(item_id)?;
-        let value = self
-            .send(
-                Method::GET,
-                "get_item_details",
-                &format!("/Items/{item_id}"),
-                false,
-            )
-            .await?;
-        normalize_item(&value)
-            .ok_or_else(|| MediaError::serialization("jellyfin", "get_item_details"))
-    }
 
     async fn send(
         &self,
@@ -111,30 +98,4 @@ impl JellyfinClient {
         }
         serde_json::from_slice(&bytes).map_err(|_| MediaError::serialization("jellyfin", operation))
     }
-}
-
-fn require_id(item_id: &str) -> Result<(), MediaError> {
-    if item_id.trim().is_empty() {
-        Err(MediaError::Validation("item_id is required".into()))
-    } else {
-        Ok(())
-    }
-}
-
-fn normalize_item(value: &Value) -> Option<MediaSearchItem> {
-    let media_type = match value.get("Type")?.as_str()?.to_ascii_lowercase().as_str() {
-        "movie" => MediaType::Movie,
-        "series" | "season" | "episode" => MediaType::Tv,
-        _ => return None,
-    };
-    Some(MediaSearchItem {
-        id: value.get("Id")?.as_str()?.to_owned(),
-        media_type,
-        title: value.get("Name")?.as_str()?.to_owned(),
-        year: value
-            .get("ProductionYear")
-            .and_then(Value::as_i64)
-            .and_then(|year| i32::try_from(year).ok()),
-        status: None,
-    })
 }

@@ -59,6 +59,48 @@ async fn search_normalizes_without_raw_source_and_encodes_query() {
 }
 
 #[tokio::test]
+async fn item_details_selects_movie_or_tv_catalog_endpoint() {
+    let app = Router::new()
+        .route(
+            "/api/v1/movie/{id}",
+            get(|Path(id): Path<String>| async move {
+                assert_eq!(id, "100");
+                common::json_response(json!({
+                    "id": 100,
+                    "mediaType": "movie",
+                    "title": "Alien",
+                    "releaseDate": "1979-05-25",
+                    "mediaInfo": {"status": 5}
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/tv/{id}",
+            get(|Path(id): Path<String>| async move {
+                assert_eq!(id, "60625");
+                common::json_response(json!({
+                    "id": 60625,
+                    "mediaType": "tv",
+                    "name": "Rick and Morty",
+                    "firstAirDate": "2013-12-02",
+                    "mediaInfo": {"status": 4}
+                }))
+            }),
+        );
+    let client = client(common::spawn_mock_app(app).await, "key");
+
+    let movie = client.item_details(MediaType::Movie, "100").await.unwrap();
+    let tv = client.item_details(MediaType::Tv, "60625").await.unwrap();
+
+    assert_eq!(movie.id, "100");
+    assert_eq!(movie.media_type, MediaType::Movie);
+    assert_eq!(movie.title, "Alien");
+    assert_eq!(tv.id, "60625");
+    assert_eq!(tv.media_type, MediaType::Tv);
+    assert_eq!(tv.title, "Rick and Morty");
+}
+
+#[tokio::test]
 async fn tv_request_excludes_season_zero_and_includes_available_seasons() {
     let request_body = Arc::new(Mutex::new(None));
     let captured_body = Arc::clone(&request_body);

@@ -31,6 +31,12 @@ pub struct SearchMediaQuery {
     pub query: String,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ItemDetailsQuery {
+    pub media_type: MediaType,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateMediaRequest {
@@ -138,6 +144,20 @@ mod tests {
             MediaType::Tv
         );
         assert!(serde_json::from_str::<MediaType>(r#""music""#).is_err());
+    }
+
+    #[test]
+    fn item_details_query_requires_a_catalog_media_type() {
+        assert_eq!(
+            serde_json::from_str::<ItemDetailsQuery>(r#"{"media_type":"tv"}"#).unwrap(),
+            ItemDetailsQuery {
+                media_type: MediaType::Tv,
+            }
+        );
+        assert!(serde_json::from_str::<ItemDetailsQuery>("{}").is_err());
+        assert!(
+            serde_json::from_str::<ItemDetailsQuery>(r#"{"media_type":"series"}"#).is_err()
+        );
     }
 
     #[test]
