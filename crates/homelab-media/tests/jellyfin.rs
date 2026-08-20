@@ -83,7 +83,6 @@ async fn active_sessions_are_normalized_without_raw_source() {
     assert!(!json.contains("source"));
 }
 
-
 #[tokio::test]
 async fn authorization_body_and_token_are_redacted_from_decode_errors() {
     let app = Router::new().route(

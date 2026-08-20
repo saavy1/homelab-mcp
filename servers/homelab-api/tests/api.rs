@@ -125,9 +125,7 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
     {
         return match id {
             "404" => (StatusCode::NOT_FOUND, "not found").into_response(),
-            "500" => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "private backend failure").into_response()
-            }
+            "500" => (StatusCode::INTERNAL_SERVER_ERROR, "private backend failure").into_response(),
             "999" => axum::Json(json!({})).into_response(),
             _ => axum::Json(json!({
                 "id": id,
@@ -210,11 +208,7 @@ async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
         (Method::GET, "/api/v1/capabilities", None),
         (Method::GET, "/api/v1/health", None),
         (Method::GET, "/api/v1/media/search?query=Alien", None),
-        (
-            Method::GET,
-            "/api/v1/media/items/60625?media_type=tv",
-            None,
-        ),
+        (Method::GET, "/api/v1/media/items/60625?media_type=tv", None),
         (
             Method::POST,
             "/api/v1/media/requests",
@@ -399,11 +393,7 @@ async fn item_details_requires_exact_media_type_query_and_selects_catalog_endpoi
             .oneshot(request(Method::GET, uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(
-            response.status(),
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "{uri}"
-        );
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
         assert_eq!(json_body(response).await["error"]["code"], "validation");
         assert_eq!(backend.calls.lock().len(), calls_before, "{uri}");
     }
@@ -444,10 +434,7 @@ async fn query_routes_reject_unknown_fields_and_oversized_values() {
 async fn identifiers_reject_path_syntax_before_backend_calls() {
     let (app, backend) = app().await;
     for (method, uri) in [
-        (
-            Method::GET,
-            "/api/v1/media/items/%2E%2E?media_type=tv",
-        ),
+        (Method::GET, "/api/v1/media/items/%2E%2E?media_type=tv"),
         (
             Method::POST,
             "/api/v1/media/requests/http%3A%2F%2Fattacker/approve",
@@ -515,8 +502,8 @@ async fn stable_error_codes_map_to_documented_http_statuses() {
                     Method::GET,
                     &format!("/api/v1/media/items/{id}?media_type=tv"),
                 )
-                    .body(Body::empty())
-                    .unwrap(),
+                .body(Body::empty())
+                .unwrap(),
             )
             .await
             .unwrap();

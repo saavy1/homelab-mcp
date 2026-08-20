@@ -81,3 +81,18 @@ OK
 ## Concerns
 
 None observed in the requested scope.
+
+
+## Formatting cleanup verification
+
+After `cargo fmt --all`, the final formatted tree was verified with:
+
+```text
+cargo test -p homelab-api-model -> 7 passed (2 suites)
+cargo test -p homelab-media     -> 25 passed (7 suites)
+cargo test -p homelab-api       -> 16 passed (4 suites)
+cargo test -p homelab-client    -> 6 passed (3 suites)
+cargo test -p homelab-cli       -> 9 passed (2 suites)
+cargo clippy -p homelab-api-model -p homelab-media -p homelab-api -p homelab-client -p homelab-cli --all-targets -- -D warnings -> OK
+cargo fmt --all -- --check -> passed
+```

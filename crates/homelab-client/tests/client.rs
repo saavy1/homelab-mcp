@@ -476,10 +476,7 @@ async fn every_operation_uses_a_typed_fixed_route() {
         vec![
             (Method::GET, "/api/v1/health"),
             (Method::GET, "/api/v1/media/search?query=Witch+Hat"),
-            (
-                Method::GET,
-                "/api/v1/media/items/60625?media_type=tv"
-            ),
+            (Method::GET, "/api/v1/media/items/60625?media_type=tv"),
             (Method::GET, "/api/v1/media/requests?status=pending+review"),
             (Method::GET, "/api/v1/media/downloads?status=downloading"),
             (Method::GET, "/api/v1/media/library/status"),

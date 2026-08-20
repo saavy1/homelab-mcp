@@ -64,12 +64,7 @@ pub(crate) async fn item_details(
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> Response {
-    let meta = OperationMeta::new(
-        "media.items.show",
-        RiskLevel::Read,
-        "jellyseerr",
-        Some(&id),
-    );
+    let meta = OperationMeta::new("media.items.show", RiskLevel::Read, "jellyseerr", Some(&id));
     if let Err(message) = validate_catalog_id(&id) {
         return validation_response(&context.request_id, meta, message);
     }

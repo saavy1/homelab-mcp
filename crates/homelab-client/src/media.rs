@@ -1,8 +1,8 @@
 use crate::{ClientError, HomelabClient};
 use homelab_api_model::{
     ActiveSession, CreateMediaRequest, DeleteDownloadQuery, DownloadItem, ItemDetailsQuery,
-    LibraryStatus, ListDownloadsQuery, ListRequestsQuery, MediaHealth, MediaOperation, MediaRequest,
-    MediaSearchItem, MediaType, OperationEnvelope, SearchMediaQuery,
+    LibraryStatus, ListDownloadsQuery, ListRequestsQuery, MediaHealth, MediaOperation,
+    MediaRequest, MediaSearchItem, MediaType, OperationEnvelope, SearchMediaQuery,
 };
 use reqwest::Method;
 

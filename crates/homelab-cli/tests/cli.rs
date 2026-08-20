@@ -359,10 +359,7 @@ async fn search_result_id_and_type_are_accepted_by_item_show_with_exact_query() 
     assert_eq!(shown["data"]["media_type"], "tv");
     let requests = api.requests();
     assert_eq!(requests[0].uri, "/api/v1/media/search?query=Rick+and+Morty");
-    assert_eq!(
-        requests[1].uri,
-        "/api/v1/media/items/60625?media_type=tv"
-    );
+    assert_eq!(requests[1].uri, "/api/v1/media/items/60625?media_type=tv");
 }
 
 #[tokio::test(flavor = "multi_thread")]

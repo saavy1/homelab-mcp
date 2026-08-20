@@ -65,7 +65,6 @@ impl JellyfinClient {
             .collect())
     }
 
-
     async fn send(
         &self,
         method: Method,

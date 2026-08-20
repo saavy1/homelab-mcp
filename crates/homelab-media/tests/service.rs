@@ -214,11 +214,7 @@ async fn item_details_uses_jellyseerr_catalog_and_never_jellyfin() {
     });
     let jellyseerr_url = common::spawn_mock_app(jellyseerr).await;
     let jellyfin_url = common::spawn_mock_app(jellyfin).await;
-    let service = service(config(
-        jellyseerr_url.clone(),
-        jellyseerr_url,
-        jellyfin_url,
-    ));
+    let service = service(config(jellyseerr_url.clone(), jellyseerr_url, jellyfin_url));
 
     let result = service
         .item_details("req-item", "60625", MediaType::Tv)

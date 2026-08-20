@@ -155,9 +155,7 @@ mod tests {
             }
         );
         assert!(serde_json::from_str::<ItemDetailsQuery>("{}").is_err());
-        assert!(
-            serde_json::from_str::<ItemDetailsQuery>(r#"{"media_type":"series"}"#).is_err()
-        );
+        assert!(serde_json::from_str::<ItemDetailsQuery>(r#"{"media_type":"series"}"#).is_err());
     }
 
     #[test]
