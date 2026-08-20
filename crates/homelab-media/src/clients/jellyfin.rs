@@ -216,10 +216,10 @@ fn normalize_library_episode(item: &Value, requested_season: u32) -> Option<Libr
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())?;
     let jellyfin_id = item
-        .get("Id")?
-        .as_str()
-        .filter(|value| !value.trim().is_empty())?
-        .to_owned();
+        .get("Id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned);
     let tmdb_id = item
         .pointer("/ProviderIds/Tmdb")
         .and_then(Value::as_str)
@@ -370,9 +370,26 @@ mod tests {
                                     "ParentIndexNumber": 3,
                                     "IndexNumber": -1
                                 }),
+                                json!({
+                                    "ProviderIds": {"Tmdb": "303"},
+                                    "ParentIndexNumber": 3,
+                                    "IndexNumber": 3
+                                }),
+                                json!({
+                                    "Id": "   ",
+                                    "ProviderIds": {},
+                                    "ParentIndexNumber": 3,
+                                    "IndexNumber": 4
+                                }),
+                                json!({
+                                    "Id": "malformed-season",
+                                    "ProviderIds": {"Tmdb": "ignored"},
+                                    "ParentIndexNumber": "3",
+                                    "IndexNumber": 5
+                                }),
                             ]
                         };
-                        Json(json!({"Items": items, "TotalRecordCount": 204}))
+                        Json(json!({"Items": items, "TotalRecordCount": 207}))
                     }
                 }),
             );
@@ -388,16 +405,28 @@ mod tests {
             season.episodes,
             vec![
                 LibraryEpisode {
-                    jellyfin_id: "episode-1".into(),
+                    jellyfin_id: Some("episode-1".into()),
                     tmdb_id: Some("301".into()),
                     season_number: 3,
                     episode_number: 1,
                 },
                 LibraryEpisode {
-                    jellyfin_id: "episode-2".into(),
+                    jellyfin_id: Some("episode-2".into()),
                     tmdb_id: None,
                     season_number: 3,
                     episode_number: 2,
+                },
+                LibraryEpisode {
+                    jellyfin_id: None,
+                    tmdb_id: Some("303".into()),
+                    season_number: 3,
+                    episode_number: 3,
+                },
+                LibraryEpisode {
+                    jellyfin_id: None,
+                    tmdb_id: None,
+                    season_number: 3,
+                    episode_number: 4,
                 },
             ]
         );

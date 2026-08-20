@@ -30,7 +30,7 @@ pub(crate) struct LibrarySeason {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct LibraryEpisode {
-    pub(crate) jellyfin_id: String,
+    pub(crate) jellyfin_id: Option<String>,
     pub(crate) tmdb_id: Option<String>,
     pub(crate) season_number: u32,
     pub(crate) episode_number: u32,
@@ -51,7 +51,7 @@ pub(crate) fn compare_season_availability(
     let mut expected_tmdb_ids = HashSet::with_capacity(expected_episodes.len());
     let mut expected_numbers = HashSet::with_capacity(expected_episodes.len());
     for episode in &expected_episodes {
-        if let Some(tmdb_id) = nonempty_tmdb_id(&episode.tmdb_id)
+        if let Some(tmdb_id) = nonempty_id(&episode.tmdb_id)
             && !expected_tmdb_ids.insert(tmdb_id.to_owned())
         {
             return Err(MediaError::Conflict);
@@ -61,16 +61,24 @@ pub(crate) fn compare_season_availability(
         }
     }
 
-    let mut actual_tmdb_ids = HashMap::new();
+    let mut actual_jellyfin_ids = HashSet::new();
+    let mut actual_tmdb_ids = HashMap::<String, Vec<usize>>::new();
     let mut actual_numbers = HashMap::<(u32, u32), Vec<usize>>::new();
     if let Some(library) = &actual {
+        actual_jellyfin_ids.reserve(library.episodes.len());
         actual_tmdb_ids.reserve(library.episodes.len());
         actual_numbers.reserve(library.episodes.len());
         for (index, episode) in library.episodes.iter().enumerate() {
-            if let Some(tmdb_id) = episode.tmdb_id.as_deref().and_then(nonempty_tmdb_id)
-                && actual_tmdb_ids.insert(tmdb_id.to_owned(), index).is_some()
+            if let Some(jellyfin_id) = episode.jellyfin_id.as_deref().and_then(nonempty_id)
+                && !actual_jellyfin_ids.insert(jellyfin_id.to_owned())
             {
                 return Err(MediaError::Conflict);
+            }
+            if let Some(tmdb_id) = episode.tmdb_id.as_deref().and_then(nonempty_id) {
+                actual_tmdb_ids
+                    .entry(tmdb_id.to_owned())
+                    .or_default()
+                    .push(index);
             }
             actual_numbers
                 .entry((episode.season_number, episode.episode_number))
@@ -200,13 +208,16 @@ fn match_actual_episode(
     expected: &ExpectedEpisode,
     season: u32,
     actual: &[LibraryEpisode],
-    actual_tmdb_ids: &HashMap<String, usize>,
+    actual_tmdb_ids: &HashMap<String, Vec<usize>>,
     actual_numbers: &HashMap<(u32, u32), Vec<usize>>,
     consumed: &mut HashSet<usize>,
 ) -> Result<bool, MediaError> {
-    let expected_tmdb_id = nonempty_tmdb_id(&expected.tmdb_id);
-    if let Some(index) = expected_tmdb_id.and_then(|tmdb_id| actual_tmdb_ids.get(tmdb_id).copied())
-    {
+    let expected_tmdb_id = nonempty_id(&expected.tmdb_id);
+    if let Some(indices) = expected_tmdb_id.and_then(|tmdb_id| actual_tmdb_ids.get(tmdb_id)) {
+        if indices.len() != 1 {
+            return Err(MediaError::Conflict);
+        }
+        let index = indices[0];
         if !consumed.insert(index) {
             return Err(MediaError::Conflict);
         }
@@ -221,7 +232,7 @@ fn match_actual_episode(
             || actual[*index]
                 .tmdb_id
                 .as_deref()
-                .and_then(nonempty_tmdb_id)
+                .and_then(nonempty_id)
                 .is_none()
     });
     let Some(index) = candidates.next() else {
@@ -233,7 +244,7 @@ fn match_actual_episode(
     Ok(true)
 }
 
-fn nonempty_tmdb_id(value: &str) -> Option<&str> {
+fn nonempty_id(value: &str) -> Option<&str> {
     (!value.trim().is_empty()).then_some(value)
 }
 
@@ -297,7 +308,7 @@ mod tests {
         episode_number: u32,
     ) -> LibraryEpisode {
         LibraryEpisode {
-            jellyfin_id: format!("opaque-{season_number}-{episode_number}"),
+            jellyfin_id: Some(format!("opaque-{season_number}-{episode_number}")),
             tmdb_id: tmdb_id.map(str::to_owned),
             season_number,
             episode_number,
@@ -554,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_actual_tmdb_ids_conflict() {
+    fn duplicate_actual_tmdb_ids_selected_by_expected_episode_conflict() {
         let error = compare_season_availability(
             expected(3, vec![episode("301", 1, Some(date(2026, 8, 1)))]),
             actual(vec![
@@ -566,6 +577,70 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(error, MediaError::Conflict));
+    }
+
+    #[test]
+    fn duplicate_actual_tmdb_ids_unrelated_to_expected_episodes_are_ignored() {
+        let result = compare(
+            expected(3, vec![episode("301", 1, Some(date(2026, 8, 1)))]),
+            actual(vec![
+                library_episode(Some("301"), 3, 1),
+                library_episode(Some("999"), 3, 98),
+                library_episode(Some("999"), 3, 99),
+            ]),
+        );
+
+        assert_eq!(result.announced.available_count, 1);
+        assert_eq!(result.announced.missing_count, 0);
+    }
+
+    #[test]
+    fn duplicate_nonblank_jellyfin_ids_conflict_but_distinct_ids_match() {
+        let first = library_episode(Some("301"), 3, 1);
+        let mut second = library_episode(Some("302"), 3, 2);
+        let expected_season = || {
+            expected(
+                3,
+                vec![
+                    episode("301", 1, Some(date(2026, 8, 1))),
+                    episode("302", 2, Some(date(2026, 8, 2))),
+                ],
+            )
+        };
+
+        let result = compare(
+            expected_season(),
+            actual(vec![first.clone(), second.clone()]),
+        );
+        assert_eq!(result.announced.available_count, 2);
+
+        second.jellyfin_id = first.jellyfin_id.clone();
+        let error =
+            compare_season_availability(expected_season(), actual(vec![first, second]), as_of())
+                .unwrap_err();
+        assert!(matches!(error, MediaError::Conflict));
+    }
+
+    #[test]
+    fn missing_or_blank_jellyfin_ids_do_not_prevent_episode_matching() {
+        let mut first = library_episode(Some("301"), 3, 1);
+        first.jellyfin_id = None;
+        let mut second = library_episode(Some("302"), 3, 2);
+        second.jellyfin_id = Some("   ".into());
+
+        let result = compare(
+            expected(
+                3,
+                vec![
+                    episode("301", 1, Some(date(2026, 8, 1))),
+                    episode("302", 2, Some(date(2026, 8, 2))),
+                ],
+            ),
+            actual(vec![first, second]),
+        );
+
+        assert_eq!(result.announced.available_count, 2);
+        assert_eq!(result.announced.missing_count, 0);
     }
 
     #[test]
