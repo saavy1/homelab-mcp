@@ -343,6 +343,18 @@ mod tests {
         assert_eq!(result.announced.available_count, 2);
         assert_eq!(result.announced.missing_count, 0);
         assert_eq!(
+            result.next_airing.as_ref().map(|episode| (
+                episode.episode_number,
+                episode.release_status,
+                episode.presence,
+            )),
+            Some((
+                2,
+                EpisodeReleaseStatus::Future,
+                EpisodePresence::Available,
+            ))
+        );
+        assert_eq!(
             result
                 .episodes
                 .unwrap()
@@ -413,6 +425,27 @@ mod tests {
     }
 
     #[test]
+    fn missing_aired_episode_takes_precedence_over_missing_unknown_date_episode() {
+        let result = compare(
+            expected(
+                3,
+                vec![
+                    episode("301", 1, Some(date(2026, 8, 1))),
+                    episode("302", 2, None),
+                ],
+            ),
+            actual(vec![]),
+        );
+
+        assert_eq!(result.aired.status, CompletenessStatus::Incomplete);
+        assert_eq!(result.aired.expected_count, 1);
+        assert_eq!(result.aired.available_count, 0);
+        assert_eq!(result.aired.missing_count, 1);
+        assert_eq!(result.unknown_air_date_count, 1);
+        assert_eq!(result.announced.missing_count, 2);
+    }
+
+    #[test]
     fn available_unknown_date_episode_does_not_make_aired_status_unknown() {
         let result = compare(
             expected(3, vec![episode("301", 1, None)]),
@@ -464,36 +497,24 @@ mod tests {
     }
 
     #[test]
-    fn exact_tmdb_provider_matches_win_over_conflicting_number_candidates() {
-        let result = compare(
+    fn exact_tmdb_provider_match_wins_before_an_eligible_number_fallback() {
+        let error = compare_season_availability(
             expected(
                 3,
                 vec![
                     episode("301", 1, Some(date(2026, 8, 1))),
-                    episode("302", 2, Some(date(2026, 8, 2))),
-                    episode("303", 3, Some(date(2026, 8, 3))),
+                    episode("", 2, Some(date(2026, 8, 2))),
                 ],
             ),
             actual(vec![
                 library_episode(Some("301"), 3, 2),
-                library_episode(Some("302"), 3, 1),
-                library_episode(Some("different"), 3, 3),
+                library_episode(None, 3, 1),
             ]),
-        );
+            as_of(),
+        )
+        .unwrap_err();
 
-        assert_eq!(
-            result
-                .episodes
-                .unwrap()
-                .iter()
-                .map(|episode| episode.presence)
-                .collect::<Vec<_>>(),
-            vec![
-                EpisodePresence::Available,
-                EpisodePresence::Available,
-                EpisodePresence::Missing,
-            ]
-        );
+        assert!(matches!(error, MediaError::Conflict));
     }
 
     #[test]
