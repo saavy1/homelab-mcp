@@ -362,20 +362,14 @@ pub(crate) async fn season_availability(
         "homelab-media",
         None,
     );
-    let query = match parse_query::<SeasonAvailabilityQuery>(
-        raw.as_deref(),
-        &["media_id", "season"],
-    ) {
-        Ok(query) if query.media_id > 0 => query,
-        Ok(_) => {
-            return validation_response(
-                &context.request_id,
-                meta,
-                "media_id must be positive",
-            );
-        }
-        Err(message) => return validation_response(&context.request_id, meta, message),
-    };
+    let query =
+        match parse_query::<SeasonAvailabilityQuery>(raw.as_deref(), &["media_id", "season"]) {
+            Ok(query) if query.media_id > 0 => query,
+            Ok(_) => {
+                return validation_response(&context.request_id, meta, "media_id must be positive");
+            }
+            Err(message) => return validation_response(&context.request_id, meta, message),
+        };
     let result = state
         .media
         .season_availability(&context.request_id, query.media_id, query.season)

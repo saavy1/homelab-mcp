@@ -64,7 +64,6 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
         return Ok(());
     }
 
-
     match envelope.get("data") {
         Some(Value::Array(rows)) => write_array(writer, rows),
         Some(Value::Object(fields)) => {
@@ -114,15 +113,15 @@ fn write_availability_table(
     let Some(data) = envelope.data.as_ref() else {
         return Ok(());
     };
-    let next_airing = data
-        .next_airing
-        .as_ref()
-        .and_then(|episode| {
-            episode.air_date.as_ref().map(|air_date| {
-                Value::String(format!("E{} {air_date}", episode.episode_number))
+    let next_airing =
+        data.next_airing
+            .as_ref()
+            .and_then(|episode| {
+                episode.air_date.as_ref().map(|air_date| {
+                    Value::String(format!("E{} {air_date}", episode.episode_number))
+                })
             })
-        })
-        .unwrap_or(Value::Null);
+            .unwrap_or(Value::Null);
     let values = [
         cell(&Value::String(data.series.title.clone())),
         cell(&Value::from(data.season)),

@@ -109,9 +109,13 @@ async fn mock_handler(State(state): State<MockState>, request: Request) -> Respo
                 "capabilities",
                 request_id.as_deref().unwrap_or("server-request"),
                 json!({
-                    "api": {"major": 1, "minor": 0},
+                    "api": {"major": 1, "minor": 1},
                     "compatible_cli_major": compatible_cli_major,
-                    "operations": ["media.search", "media.downloads.delete"]
+                    "operations": [
+                        "media.search",
+                        "media.downloads.delete",
+                        "media.library.availability"
+                    ]
                 }),
             ),
         )
@@ -169,9 +173,7 @@ fn operation_for(method: &Method, path: &str) -> &'static str {
         (&Method::GET, "/api/v1/media/requests") => "media.requests.list",
         (&Method::GET, "/api/v1/media/downloads") => "media.downloads.list",
         (&Method::GET, "/api/v1/media/library/status") => "media.library.status",
-        (&Method::GET, "/api/v1/media/library/availability") => {
-            "media.library.availability"
-        }
+        (&Method::GET, "/api/v1/media/library/availability") => "media.library.availability",
         (&Method::POST, "/api/v1/media/library/refresh") => "media.library.refresh",
         (&Method::GET, "/api/v1/media/sessions") => "media.sessions.list",
         _ if path.ends_with("/approve") => "media.requests.approve",
@@ -225,7 +227,11 @@ fn normal_response(
             let season = uri
                 .split_once('?')
                 .map(|(_, query)| query)
-                .and_then(|query| query.split('&').find_map(|field| field.strip_prefix("season=")))
+                .and_then(|query| {
+                    query
+                        .split('&')
+                        .find_map(|field| field.strip_prefix("season="))
+                })
                 .and_then(|season| season.parse::<u32>().ok())
                 .unwrap_or(3);
             json!({
@@ -413,10 +419,7 @@ async fn the_complete_curated_command_tree_is_available() {
 #[tokio::test(flavor = "multi_thread")]
 async fn availability_help_lists_both_required_flags_without_http() {
     let api = MockApi::spawn(Mode::Normal).await;
-    let output = run(
-        &api,
-        &["media", "library", "availability", "--help"],
-    );
+    let output = run(&api, &["media", "library", "availability", "--help"]);
 
     assert_eq!(output.status.code(), Some(0));
     let help = String::from_utf8(output.stdout).unwrap();
@@ -603,20 +606,8 @@ async fn invalid_arguments_exit_two_without_http_and_missing_config_is_structure
             "tv",
         ],
         vec!["media", "library", "availability"],
-        vec![
-            "media",
-            "library",
-            "availability",
-            "--media-id",
-            "60625",
-        ],
-        vec![
-            "media",
-            "library",
-            "availability",
-            "--season",
-            "3",
-        ],
+        vec!["media", "library", "availability", "--media-id", "60625"],
+        vec!["media", "library", "availability", "--season", "3"],
         vec![
             "media",
             "library",

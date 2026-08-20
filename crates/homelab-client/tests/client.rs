@@ -530,7 +530,10 @@ async fn every_operation_uses_a_typed_fixed_route() {
     assert_eq!(availability.operation, "media.library.availability");
     let availability = availability.data.unwrap();
     assert_eq!(availability.series.media_id, "60625");
-    assert_eq!(availability.series.jellyfin_id.as_deref(), Some("series-60625"));
+    assert_eq!(
+        availability.series.jellyfin_id.as_deref(),
+        Some("series-60625")
+    );
     assert_eq!(availability.series.title, "Rick and Morty");
     assert_eq!(availability.season, 3);
     assert_eq!(availability.as_of.to_string(), "2026-08-19");

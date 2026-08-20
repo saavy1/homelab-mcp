@@ -122,20 +122,8 @@ impl JellyseerrClient {
         let details_path = format!("/api/v1/tv/{media_id}");
         let season_path = format!("/api/v1/tv/{media_id}/season/{season}");
         let (details, season_value) = tokio::try_join!(
-            self.send(
-                Method::GET,
-                "get_tv_details",
-                &details_path,
-                None,
-                false
-            ),
-            self.send(
-                Method::GET,
-                "get_tv_season",
-                &season_path,
-                None,
-                false
-            ),
+            self.send(Method::GET, "get_tv_details", &details_path, None, false),
+            self.send(Method::GET, "get_tv_season", &season_path, None, false),
         )?;
         normalize_expected_season(media_id, season, &details, &season_value)
     }
@@ -558,11 +546,7 @@ mod tests {
     #[tokio::test]
     async fn expected_season_requires_all_normalized_fields() {
         let cases = [
-            (
-                "tv title",
-                json!({"id": 60625}),
-                valid_season(3),
-            ),
+            ("tv title", json!({"id": 60625}), valid_season(3)),
             (
                 "episode id",
                 valid_details(),
@@ -683,10 +667,7 @@ mod tests {
     #[tokio::test]
     async fn expected_season_maps_tv_season_404_without_raw_body() {
         let app = Router::new()
-            .route(
-                "/api/v1/tv/60625",
-                get(|| async { Json(valid_details()) }),
-            )
+            .route("/api/v1/tv/60625", get(|| async { Json(valid_details()) }))
             .route(
                 "/api/v1/tv/60625/season/3",
                 get(|| async { (StatusCode::NOT_FOUND, "UPSTREAM_SECRET") }),

@@ -222,9 +222,7 @@ impl MediaCommand {
             Self::Library { command } => match command {
                 LibraryCommand::Status => ("media.library.status", "read"),
                 LibraryCommand::Refresh => ("media.library.refresh", "write"),
-                LibraryCommand::Availability { .. } => {
-                    ("media.library.availability", "read")
-                }
+                LibraryCommand::Availability { .. } => ("media.library.availability", "read"),
             },
             Self::Sessions { .. } => ("media.sessions.list", "read"),
         }

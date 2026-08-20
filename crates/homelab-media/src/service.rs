@@ -262,8 +262,7 @@ impl MediaService {
             .jellyfin
             .library_season(&media_id.to_string(), season)
             .await?;
-        let data =
-            compare_season_availability(expected, actual, Utc::now().date_naive())?;
+        let data = compare_season_availability(expected, actual, Utc::now().date_naive())?;
         Ok(success(
             "media.library.availability",
             request_id,

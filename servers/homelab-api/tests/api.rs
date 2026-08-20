@@ -396,7 +396,11 @@ async fn season_availability_returns_exact_success_envelope_and_accepts_season_z
             }
         })
     );
-    assert!(!serde_json::to_string(&body).unwrap().contains("opaque-episode"));
+    assert!(
+        !serde_json::to_string(&body)
+            .unwrap()
+            .contains("opaque-episode")
+    );
 
     let response = app
         .oneshot(
@@ -461,9 +465,7 @@ async fn season_availability_maps_not_found_and_redacts_upstream_failures() {
             .oneshot(
                 request(
                     Method::GET,
-                    &format!(
-                        "/api/v1/media/library/availability?media_id={media_id}&season=3"
-                    ),
+                    &format!("/api/v1/media/library/availability?media_id={media_id}&season=3"),
                 )
                 .header(REQUEST_ID_HEADER, "req-season-error")
                 .body(Body::empty())

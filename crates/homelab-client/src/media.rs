@@ -202,9 +202,7 @@ impl<'a> MediaClient<'a> {
         request_id: &str,
         query: &SeasonAvailabilityQuery,
     ) -> Result<OperationEnvelope<SeasonAvailability>, ClientError> {
-        let mut url = self
-            .client
-            .route(&["media", "library", "availability"])?;
+        let mut url = self.client.route(&["media", "library", "availability"])?;
         url.query_pairs_mut()
             .append_pair("media_id", &query.media_id.to_string())
             .append_pair("season", &query.season.to_string());

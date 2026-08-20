@@ -262,13 +262,14 @@ mod tests {
                 minor: API_MINOR,
             },
             compatible_cli_major: API_MAJOR,
-            operations: vec!["media.search".into()],
+            operations: vec!["media.search".into(), "media.library.availability".into()],
         };
 
         let value = serde_json::to_value(capabilities).unwrap();
         assert_eq!(value["api"]["major"], 1);
         assert_eq!(value["api"]["minor"], 1);
         assert_eq!(value["compatible_cli_major"], 1);
+        assert_eq!(value["operations"][1], "media.library.availability");
     }
 
     #[test]

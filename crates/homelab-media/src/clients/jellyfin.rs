@@ -247,16 +247,10 @@ fn percent_encode_path_segment(value: &str) -> String {
     encoded
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        Json, Router,
-        extract::OriginalUri,
-        http::HeaderMap,
-        routing::get,
-    };
+    use axum::{Json, Router, extract::OriginalUri, http::HeaderMap, routing::get};
     use homelab_core::ErrorCode;
     use parking_lot::Mutex;
     use serde_json::json;

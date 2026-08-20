@@ -139,10 +139,14 @@ pub(crate) fn compare_season_availability(
             presence,
         };
         if release_status == EpisodeReleaseStatus::Future
-            && next_airing.as_ref().is_none_or(|next: &AvailabilityEpisode| {
-                (availability_episode.air_date, availability_episode.episode_number)
-                    < (next.air_date, next.episode_number)
-            })
+            && next_airing
+                .as_ref()
+                .is_none_or(|next: &AvailabilityEpisode| {
+                    (
+                        availability_episode.air_date,
+                        availability_episode.episode_number,
+                    ) < (next.air_date, next.episode_number)
+                })
         {
             next_airing = Some(availability_episode.clone());
         }
@@ -185,11 +189,7 @@ pub(crate) fn compare_season_availability(
         as_of,
         in_library: actual.is_some(),
         aired: summary(aired_status, aired_expected, aired_available)?,
-        announced: summary(
-            announced_status,
-            announced_expected,
-            announced_available,
-        )?,
+        announced: summary(announced_status, announced_expected, announced_available)?,
         unknown_air_date_count: checked_count(unknown_count)?,
         next_airing,
         episodes,
@@ -311,10 +311,7 @@ mod tests {
         })
     }
 
-    fn compare(
-        expected: ExpectedSeason,
-        actual: Option<LibrarySeason>,
-    ) -> SeasonAvailability {
+    fn compare(expected: ExpectedSeason, actual: Option<LibrarySeason>) -> SeasonAvailability {
         compare_season_availability(expected, actual, as_of()).unwrap()
     }
 
@@ -348,11 +345,7 @@ mod tests {
                 episode.release_status,
                 episode.presence,
             )),
-            Some((
-                2,
-                EpisodeReleaseStatus::Future,
-                EpisodePresence::Available,
-            ))
+            Some((2, EpisodeReleaseStatus::Future, EpisodePresence::Available,))
         );
         assert_eq!(
             result
@@ -533,11 +526,13 @@ mod tests {
             ]),
         );
 
-        assert!(result
-            .episodes
-            .unwrap()
-            .iter()
-            .all(|episode| episode.presence == EpisodePresence::Available));
+        assert!(
+            result
+                .episodes
+                .unwrap()
+                .iter()
+                .all(|episode| episode.presence == EpisodePresence::Available)
+        );
     }
 
     #[test]
@@ -668,6 +663,9 @@ mod tests {
 
     #[test]
     fn oversized_count_takes_the_internal_error_path() {
-        assert!(matches!(checked_count(usize::MAX), Err(MediaError::Internal)));
+        assert!(matches!(
+            checked_count(usize::MAX),
+            Err(MediaError::Internal)
+        ));
     }
 }
