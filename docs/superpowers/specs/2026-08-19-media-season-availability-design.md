@@ -1,7 +1,7 @@
 # Media Season Availability Design
 
 **Date:** 2026-08-19
-**Status:** Proposed
+**Status:** Approved
 
 ## Summary
 
