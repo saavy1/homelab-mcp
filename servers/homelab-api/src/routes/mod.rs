@@ -31,6 +31,7 @@ const OPERATIONS: &[&str] = &[
     "media.library.status",
     "media.library.refresh",
     "media.sessions.list",
+    "media.library.availability",
 ];
 
 pub(crate) fn read_router() -> Router<ApiState> {
@@ -49,6 +50,10 @@ pub(crate) fn read_router() -> Router<ApiState> {
         .route(
             "/api/v1/media/downloads",
             on(MethodFilter::GET, media::list_downloads),
+        )
+        .route(
+            "/api/v1/media/library/availability",
+            on(MethodFilter::GET, media::season_availability),
         )
         .route(
             "/api/v1/media/library/status",

@@ -118,6 +118,69 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
     if path == "/Sessions" {
         return axum::Json(json!([{"Id": "session-1", "UserName": "saavy"}])).into_response();
     }
+    if path == "/api/v1/tv/60625" {
+        return axum::Json(json!({
+            "id": 60625,
+            "mediaType": "tv",
+            "name": "Rick and Morty",
+            "title": "Rick and Morty",
+            "firstAirDate": "2013-12-02"
+        }))
+        .into_response();
+    }
+    if path == "/api/v1/tv/60625/season/3" {
+        return axum::Json(json!({
+            "seasonNumber": 3,
+            "episodes": [
+                {
+                    "id": 301,
+                    "episodeNumber": 1,
+                    "name": "Aired",
+                    "airDate": "2017-04-01"
+                },
+                {
+                    "id": 302,
+                    "episodeNumber": 2,
+                    "name": "Future",
+                    "airDate": "2999-01-01"
+                }
+            ]
+        }))
+        .into_response();
+    }
+    if path == "/api/v1/tv/60625/season/0" {
+        return axum::Json(json!({"seasonNumber": 0, "episodes": []})).into_response();
+    }
+    if path == "/Items" {
+        return axum::Json(json!({
+            "Items": [{
+                "Id": "series-1",
+                "ProviderIds": {"Tmdb": "60625"}
+            }],
+            "TotalRecordCount": 1
+        }))
+        .into_response();
+    }
+    if path == "/Shows/series-1/Episodes" {
+        return axum::Json(json!({
+            "Items": [
+                {
+                    "Id": "opaque-episode-1",
+                    "ProviderIds": {"Tmdb": "301"},
+                    "ParentIndexNumber": 3,
+                    "IndexNumber": 1
+                },
+                {
+                    "Id": "opaque-episode-2",
+                    "ProviderIds": {},
+                    "ParentIndexNumber": 3,
+                    "IndexNumber": 2
+                }
+            ],
+            "TotalRecordCount": 2
+        }))
+        .into_response();
+    }
     if let Some((media_type, id)) = path
         .strip_prefix("/api/v1/")
         .and_then(|rest| rest.split_once('/'))
@@ -125,7 +188,11 @@ async fn backend(State(state): State<BackendState>, request: Request) -> Respons
     {
         return match id {
             "404" => (StatusCode::NOT_FOUND, "not found").into_response(),
-            "500" => (StatusCode::INTERNAL_SERVER_ERROR, "private backend failure").into_response(),
+            "500" => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("private backend failure {SECRET}"),
+            )
+                .into_response(),
             "999" => axum::Json(json!({})).into_response(),
             _ => axum::Json(json!({
                 "id": id,
@@ -202,6 +269,230 @@ async fn json_body(response: Response<Body>) -> Value {
 }
 
 #[tokio::test]
+async fn season_availability_capability_is_appended_to_api_1_1() {
+    let (app, _) = app().await;
+    let response = app
+        .oneshot(
+            request(Method::GET, "/api/v1/capabilities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(
+        body["data"],
+        json!({
+            "api": {"major": 1, "minor": 1},
+            "compatible_cli_major": 1,
+            "operations": [
+                "media.health",
+                "media.search",
+                "media.items.show",
+                "media.requests.create",
+                "media.requests.list",
+                "media.requests.approve",
+                "media.requests.decline",
+                "media.downloads.list",
+                "media.downloads.pause",
+                "media.downloads.resume",
+                "media.downloads.delete",
+                "media.downloads.retry",
+                "media.library.status",
+                "media.library.refresh",
+                "media.sessions.list",
+                "media.library.availability"
+            ]
+        })
+    );
+}
+
+#[tokio::test]
+async fn season_availability_returns_exact_success_envelope_and_accepts_season_zero() {
+    let (app, backend) = app().await;
+    let response = app
+        .clone()
+        .oneshot(
+            request(
+                Method::GET,
+                "/api/v1/media/library/availability?media_id=60625&season=3",
+            )
+            .header(REQUEST_ID_HEADER, "req-season")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[REQUEST_ID_HEADER], "req-season");
+    let body = json_body(response).await;
+    let as_of = body["data"]["as_of"].clone();
+    let timestamp = body["provenance"]["timestamp"].clone();
+    assert!(as_of.is_string());
+    assert!(timestamp.is_string());
+    assert_eq!(
+        body,
+        json!({
+            "ok": true,
+            "operation": "media.library.availability",
+            "request_id": "req-season",
+            "risk": "read",
+            "summary": {"text": "season availability compared"},
+            "data": {
+                "series": {
+                    "media_id": "60625",
+                    "jellyfin_id": "series-1",
+                    "title": "Rick and Morty"
+                },
+                "season": 3,
+                "as_of": as_of,
+                "in_library": true,
+                "aired": {
+                    "status": "complete",
+                    "expected_count": 1,
+                    "available_count": 1,
+                    "missing_count": 0
+                },
+                "announced": {
+                    "status": "complete",
+                    "expected_count": 2,
+                    "available_count": 2,
+                    "missing_count": 0
+                },
+                "unknown_air_date_count": 0,
+                "next_airing": {
+                    "episode_id": "302",
+                    "episode_number": 2,
+                    "title": "Future",
+                    "air_date": "2999-01-01",
+                    "release_status": "future",
+                    "presence": "available"
+                },
+                "episodes": [
+                    {
+                        "episode_id": "301",
+                        "episode_number": 1,
+                        "title": "Aired",
+                        "air_date": "2017-04-01",
+                        "release_status": "aired",
+                        "presence": "available"
+                    },
+                    {
+                        "episode_id": "302",
+                        "episode_number": 2,
+                        "title": "Future",
+                        "air_date": "2999-01-01",
+                        "release_status": "future",
+                        "presence": "available"
+                    }
+                ]
+            },
+            "provenance": {
+                "service": "homelab-media",
+                "timestamp": timestamp
+            }
+        })
+    );
+    assert!(!serde_json::to_string(&body).unwrap().contains("opaque-episode"));
+
+    let response = app
+        .oneshot(
+            request(
+                Method::GET,
+                "/api/v1/media/library/availability?media_id=60625&season=0",
+            )
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["data"]["season"], 0);
+    assert_eq!(backend.calls.lock().len(), 8);
+}
+
+#[tokio::test]
+async fn season_availability_rejects_every_invalid_query_without_backend_calls() {
+    let (app, backend) = app().await;
+    for uri in [
+        "/api/v1/media/library/availability",
+        "/api/v1/media/library/availability?season=3",
+        "/api/v1/media/library/availability?media_id=60625",
+        "/api/v1/media/library/availability?media_id=0&season=3",
+        "/api/v1/media/library/availability?media_id=-1&season=3",
+        "/api/v1/media/library/availability?media_id=60625&season=-1",
+        "/api/v1/media/library/availability?media_id=60625&season=4294967296",
+        "/api/v1/media/library/availability?media_id=9223372036854775808&season=3",
+        "/api/v1/media/library/availability?media_id=60625&media_id=7&season=3",
+        "/api/v1/media/library/availability?media_id=60625&season=3&season=4",
+        "/api/v1/media/library/availability?media_id=60625&season=3&backend=jellyfin",
+        "/api/v1/media/library/availability?media_id=abc&season=3",
+        "/api/v1/media/library/availability?media_id=60625&season=three",
+        "/api/v1/media/library/availability?media_id=&season=3",
+        "/api/v1/media/library/availability?media_id=60625&season=",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(Method::GET, uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+        let body = json_body(response).await;
+        assert_eq!(body["ok"], false, "{uri}");
+        assert_eq!(body["operation"], "media.library.availability", "{uri}");
+        assert_eq!(body["risk"], "read", "{uri}");
+        assert_eq!(body["error"]["code"], "validation", "{uri}");
+    }
+    assert!(backend.calls.lock().is_empty());
+}
+
+#[tokio::test]
+async fn season_availability_maps_not_found_and_redacts_upstream_failures() {
+    let (app, _) = app().await;
+    for (media_id, status, code) in [
+        ("404", StatusCode::NOT_FOUND, "not_found"),
+        ("500", StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                request(
+                    Method::GET,
+                    &format!(
+                        "/api/v1/media/library/availability?media_id={media_id}&season=3"
+                    ),
+                )
+                .header(REQUEST_ID_HEADER, "req-season-error")
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!text.contains(SECRET));
+        assert!(!text.contains("private backend failure"));
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["operation"], "media.library.availability");
+        assert_eq!(body["request_id"], "req-season-error");
+        assert_eq!(body["risk"], "read");
+        assert_eq!(body["error"]["code"], code);
+    }
+}
+
+#[tokio::test]
 async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
     let (app, _) = app().await;
     let cases = [
@@ -209,6 +500,11 @@ async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
         (Method::GET, "/api/v1/health", None),
         (Method::GET, "/api/v1/media/search?query=Alien", None),
         (Method::GET, "/api/v1/media/items/60625?media_type=tv", None),
+        (
+            Method::GET,
+            "/api/v1/media/library/availability?media_id=60625&season=3",
+            None,
+        ),
         (
             Method::POST,
             "/api/v1/media/requests",
@@ -274,6 +570,7 @@ async fn exact_curated_routes_are_mounted_and_mcp_is_not() {
     for (method, uri) in [
         (Method::POST, "/api/v1/media/search"),
         (Method::GET, "/api/v1/media/library/refresh"),
+        (Method::POST, "/api/v1/media/library/availability"),
     ] {
         let response = app
             .clone()
@@ -516,16 +813,25 @@ async fn stable_error_codes_map_to_documented_http_statuses() {
 
 #[tokio::test]
 async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
-    for (path, backend_path, expected_code, retryable) in [
+    for (path, backend_path, expected_operation, expected_code, retryable) in [
         (
             "/api/v1/media/items/4080?media_type=tv",
             "/api/v1/tv/4080",
+            "media.items.show",
+            "timeout",
+            true,
+        ),
+        (
+            "/api/v1/media/library/availability?media_id=60625&season=3",
+            "/api/v1/tv/60625",
+            "media.library.availability",
             "timeout",
             true,
         ),
         (
             "/api/v1/media/library/refresh",
             "/Library/Refresh",
+            "media.library.refresh",
             "unknown_outcome",
             false,
         ),
@@ -541,7 +847,7 @@ async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
         } else {
             Method::GET
         };
-        let mut builder = request(method.clone(), path);
+        let mut builder = request(method.clone(), path).header(REQUEST_ID_HEADER, "req-timeout");
         if method == Method::POST {
             builder = builder.header(API_MAJOR_HEADER, "1");
         }
@@ -551,6 +857,8 @@ async fn timeouts_are_503_and_mutations_preserve_unknown_outcome() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = json_body(response).await;
+        assert_eq!(body["operation"], expected_operation);
+        assert_eq!(body["request_id"], "req-timeout");
         assert_eq!(body["error"]["code"], expected_code);
         assert_eq!(body["error"]["retryable"], retryable);
     }
@@ -633,7 +941,7 @@ async fn request_body_limit_returns_a_structured_error() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn oversized_request_emits_one_redacted_completion_event() {
+async fn responses_emit_one_redacted_completion_event_with_route_metadata() {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -643,6 +951,7 @@ async fn oversized_request_emits_one_redacted_completion_event() {
     tracing::subscriber::set_global_default(subscriber).unwrap();
     let (app, _) = app().await;
     let response = app
+        .clone()
         .oneshot(
             mutation(Method::POST, "/api/v1/media/requests")
                 .header(REQUEST_ID_HEADER, "audit-1")
@@ -653,6 +962,19 @@ async fn oversized_request_emits_one_redacted_completion_event() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let response = app
+        .oneshot(
+            request(
+                Method::GET,
+                "/api/v1/media/library/availability?media_id=60625&season=3",
+            )
+            .header(REQUEST_ID_HEADER, "audit-season")
+            .body(Body::empty())
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 
     let text = String::from_utf8(logs.lock().clone()).unwrap();
     let events: Vec<Value> = text
@@ -670,6 +992,23 @@ async fn oversized_request_emits_one_redacted_completion_event() {
     assert_eq!(fields["risk"], "write");
     assert_eq!(fields["result_class"], "validation");
     assert_eq!(fields["backend"], "jellyseerr");
+    assert_eq!(fields["retryable"], false);
+    assert!(fields["duration_ms"].is_number());
+    let events: Vec<Value> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| {
+            event["fields"]["event"] == "operation_completed"
+                && event["fields"]["request_id"] == "audit-season"
+        })
+        .collect();
+    assert_eq!(events.len(), 1, "{text}");
+    let fields = &events[0]["fields"];
+    assert_eq!(fields["request_id"], "audit-season");
+    assert_eq!(fields["operation"], "media.library.availability");
+    assert_eq!(fields["risk"], "read");
+    assert_eq!(fields["result_class"], "success");
+    assert_eq!(fields["backend"], "homelab-media");
     assert_eq!(fields["retryable"], false);
     assert!(fields["duration_ms"].is_number());
     assert!(!text.contains(SECRET));

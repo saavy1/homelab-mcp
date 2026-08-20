@@ -13,7 +13,7 @@ use axum::{
 };
 use homelab_api_model::{
     API_MAJOR, CreateMediaRequest, DeleteDownloadQuery, ItemDetailsQuery, ListDownloadsQuery,
-    ListRequestsQuery, RiskLevel, SearchMediaQuery,
+    ListRequestsQuery, RiskLevel, SearchMediaQuery, SeasonAvailabilityQuery,
 };
 use homelab_core::ErrorCode;
 use serde::de::DeserializeOwned;
@@ -348,6 +348,38 @@ pub(crate) async fn retry_download(
         Err(response) => return *response,
     };
     let result = state.media.retry_download(&context.request_id, &id).await;
+    service_response(&context.request_id, meta, result)
+}
+
+pub(crate) async fn season_availability(
+    State(state): State<ApiState>,
+    Extension(context): Extension<RequestContext>,
+    RawQuery(raw): RawQuery,
+) -> Response {
+    let meta = OperationMeta::new(
+        "media.library.availability",
+        RiskLevel::Read,
+        "homelab-media",
+        None,
+    );
+    let query = match parse_query::<SeasonAvailabilityQuery>(
+        raw.as_deref(),
+        &["media_id", "season"],
+    ) {
+        Ok(query) if query.media_id > 0 => query,
+        Ok(_) => {
+            return validation_response(
+                &context.request_id,
+                meta,
+                "media_id must be positive",
+            );
+        }
+        Err(message) => return validation_response(&context.request_id, meta, message),
+    };
+    let result = state
+        .media
+        .season_availability(&context.request_id, query.media_id, query.season)
+        .await;
     service_response(&context.request_id, meta, result)
 }
 

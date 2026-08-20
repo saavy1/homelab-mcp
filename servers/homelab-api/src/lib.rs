@@ -174,6 +174,14 @@ fn route_metadata<'a>(
         };
         return (operation, risk, "sabnzbd", Some(id));
     }
+    if path == "/api/v1/media/library/availability" {
+        return (
+            "media.library.availability",
+            RiskLevel::Read,
+            "homelab-media",
+            None,
+        );
+    }
     if path == "/api/v1/media/search" {
         return ("media.search", RiskLevel::Read, "jellyseerr", None);
     }
