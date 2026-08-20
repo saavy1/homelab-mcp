@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono.workspace = true
 homelab-api-model = { path = "../homelab-api-model" }
 homelab-core = { path = "../homelab-core" }
 reqwest.workspace = true

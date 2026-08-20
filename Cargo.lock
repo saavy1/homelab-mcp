@@ -935,6 +935,7 @@ name = "homelab-media"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
  "homelab-api-model",
  "homelab-core",
  "parking_lot",
