@@ -1016,9 +1016,9 @@ Wait for ArgoCD `infra-homelab-api` to report `Synced Healthy`, then require the
 From the Mac over the existing Tailscale endpoint:
 
 ```bash
-curl --fail --silent http://homelab-api.tail1c2db57.ts.net:8080/livez
-curl --fail --silent http://homelab-api.tail1c2db57.ts.net:8080/readyz
-curl --fail --silent http://homelab-api.tail1c2db57.ts.net:8080/api/v1/capabilities
+curl --fail --silent http://homelab-api.tailc2db57.ts.net:8080/livez
+curl --fail --silent http://homelab-api.tailc2db57.ts.net:8080/readyz
+curl --fail --silent http://homelab-api.tailc2db57.ts.net:8080/api/v1/capabilities
 ```
 
 Require `livez` and `readyz` to return `ok`; capabilities must report `api.major == 1`, `api.minor == 1`, and contain `media.library.availability`.
@@ -1034,7 +1034,7 @@ Watch `Release homelab CLI` to success. Download `homelab-aarch64-apple-darwin.t
 
 - [ ] **Step 7: Run the production CLI smoke**
 
-On the Mac, with `HOMELAB_API_URL=http://homelab-api.tail1c2db57.ts.net:8080/api/v1`:
+On the Mac, with `HOMELAB_API_URL=http://homelab-api.tailc2db57.ts.net:8080/api/v1`:
 
 ```bash
 homelab media search --query "Rick and Morty"
