@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::{Path, Query},
     http::StatusCode,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use homelab_api_model::{CreateMediaRequest, HealthStatus, MediaType, RiskLevel};
 use homelab_core::ErrorCode;
@@ -400,4 +400,185 @@ async fn service_uses_exact_operation_names_and_risk_levels() {
         (item.operation.as_str(), item.risk),
         ("media.items.show", RiskLevel::Read)
     );
+}
+
+#[tokio::test]
+async fn season_availability_orchestrates_both_backends_and_returns_exact_envelope() {
+    let app = Router::new()
+        .route(
+            "/api/v1/tv/60625",
+            get(|| async {
+                common::json_response(json!({
+                    "id": 60625,
+                    "name": "Rick and Morty"
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/tv/60625/season/3",
+            get(|| async {
+                common::json_response(json!({
+                    "seasonNumber": 3,
+                    "episodes": [
+                        {
+                            "id": 301,
+                            "episodeNumber": 1,
+                            "name": "Aired",
+                            "airDate": "2017-04-01"
+                        },
+                        {
+                            "id": 302,
+                            "episodeNumber": 2,
+                            "name": "Future",
+                            "airDate": "2999-01-01"
+                        }
+                    ]
+                }))
+            }),
+        )
+        .route(
+            "/Items",
+            get(|| async {
+                common::json_response(json!({
+                    "Items": [{
+                        "Id": "series-1",
+                        "ProviderIds": {"Tmdb": "60625"}
+                    }],
+                    "TotalRecordCount": 1
+                }))
+            }),
+        )
+        .route(
+            "/Shows/series-1/Episodes",
+            get(|| async {
+                common::json_response(json!({
+                    "Items": [
+                        {
+                            "Id": "opaque-episode-1",
+                            "ProviderIds": {"Tmdb": "301"},
+                            "ParentIndexNumber": 3,
+                            "IndexNumber": 1
+                        },
+                        {
+                            "Id": "opaque-episode-2",
+                            "ProviderIds": {},
+                            "ParentIndexNumber": 3,
+                            "IndexNumber": 2
+                        }
+                    ],
+                    "TotalRecordCount": 2
+                }))
+            }),
+        );
+    let base_url = common::spawn_mock_app(app).await;
+
+    let envelope = service(config(base_url.clone(), base_url.clone(), base_url))
+        .season_availability("req-availability", 60625, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(envelope.operation, "media.library.availability");
+    assert_eq!(envelope.risk, RiskLevel::Read);
+    assert_eq!(envelope.summary.text, "season availability compared");
+    assert_eq!(envelope.request_id, "req-availability");
+    let data = envelope.data.unwrap();
+    assert_eq!(data.series.media_id, "60625");
+    assert_eq!(data.series.jellyfin_id.as_deref(), Some("series-1"));
+    assert_eq!(data.season, 3);
+    assert!(data.in_library);
+    assert_eq!(data.aired.expected_count, 1);
+    assert_eq!(data.aired.available_count, 1);
+    assert_eq!(data.announced.expected_count, 2);
+    assert_eq!(data.announced.available_count, 2);
+    let public_json = serde_json::to_string(&data).unwrap();
+    assert!(!public_json.contains("opaque-episode"));
+}
+
+#[tokio::test]
+async fn nonpositive_media_id_fails_before_any_http_call() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&requests);
+    let app = Router::new().fallback(any(move || {
+        let observed = Arc::clone(&observed);
+        async move {
+            observed.fetch_add(1, Ordering::SeqCst);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }));
+    let base_url = common::spawn_mock_app(app).await;
+    let service = service(config(base_url.clone(), base_url.clone(), base_url));
+
+    for media_id in [0, -1] {
+        let error = service
+            .season_availability("req-invalid", media_id, 3)
+            .await
+            .unwrap_err();
+        assert_eq!(error.error_code(), ErrorCode::Validation);
+        assert_eq!(error.public_message(), "media_id must be positive");
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn absent_jellyfin_series_skips_episode_endpoint_and_returns_compact_data() {
+    let episode_requests = Arc::new(AtomicUsize::new(0));
+    let observed_episode_requests = Arc::clone(&episode_requests);
+    let app = Router::new()
+        .route(
+            "/api/v1/tv/60625",
+            get(|| async {
+                common::json_response(json!({
+                    "id": 60625,
+                    "name": "Rick and Morty"
+                }))
+            }),
+        )
+        .route(
+            "/api/v1/tv/60625/season/3",
+            get(|| async {
+                common::json_response(json!({
+                    "seasonNumber": 3,
+                    "episodes": [{
+                        "id": 301,
+                        "episodeNumber": 1,
+                        "name": "Future",
+                        "airDate": "2999-01-01"
+                    }]
+                }))
+            }),
+        )
+        .route(
+            "/Items",
+            get(|| async {
+                common::json_response(json!({
+                    "Items": [],
+                    "TotalRecordCount": 0
+                }))
+            }),
+        )
+        .route(
+            "/Shows/{id}/Episodes",
+            get(move || {
+                let observed = Arc::clone(&observed_episode_requests);
+                async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    common::json_response(json!({"Items": [], "TotalRecordCount": 0}))
+                }
+            }),
+        );
+    let base_url = common::spawn_mock_app(app).await;
+
+    let envelope = service(config(base_url.clone(), base_url.clone(), base_url))
+        .season_availability("req-no-series", 60625, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(episode_requests.load(Ordering::SeqCst), 0);
+    let data = envelope.data.unwrap();
+    assert!(!data.in_library);
+    assert_eq!(data.series.jellyfin_id, None);
+    assert_eq!(data.episodes, None);
+    assert_eq!(data.aired.available_count, 0);
+    assert_eq!(data.announced.available_count, 0);
+    assert_eq!(data.next_airing.unwrap().episode_number, 1);
 }

@@ -1,11 +1,13 @@
 use crate::{
     MediaConfig, MediaError,
+    availability::compare_season_availability,
     clients::{jellyfin::JellyfinClient, jellyseerr::JellyseerrClient, sabnzbd::SabnzbdClient},
 };
+use chrono::Utc;
 use homelab_api_model::{
     ActiveSession, BackendHealth, CreateMediaRequest, DownloadItem, HealthStatus, LibraryStatus,
     MediaHealth, MediaOperation, MediaRequest, MediaSearchItem, MediaType, OperationEnvelope,
-    RiskLevel,
+    RiskLevel, SeasonAvailability,
 };
 use homelab_core::{ExecutionProvenance, ValidationIssue};
 
@@ -243,6 +245,31 @@ impl MediaService {
             RiskLevel::Read,
             "media library status read",
             status,
+        ))
+    }
+
+    pub async fn season_availability(
+        &self,
+        request_id: &str,
+        media_id: i64,
+        season: u32,
+    ) -> Result<OperationEnvelope<SeasonAvailability>, MediaError> {
+        if media_id <= 0 {
+            return Err(MediaError::Validation("media_id must be positive".into()));
+        }
+        let expected = self.jellyseerr.expected_season(media_id, season).await?;
+        let actual = self
+            .jellyfin
+            .library_season(&media_id.to_string(), season)
+            .await?;
+        let data =
+            compare_season_availability(expected, actual, Utc::now().date_naive())?;
+        Ok(success(
+            "media.library.availability",
+            request_id,
+            RiskLevel::Read,
+            "season availability compared",
+            data,
         ))
     }
 
