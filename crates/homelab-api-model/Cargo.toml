@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 homelab-core = { path = "../homelab-core" }
 schemars.workspace = true
 serde.workspace = true

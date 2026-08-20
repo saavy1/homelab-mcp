@@ -1,10 +1,11 @@
+use chrono::NaiveDate;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub use homelab_core::{OperationEnvelope, RiskLevel};
 
 pub const API_MAJOR: u16 = 1;
-pub const API_MINOR: u16 = 0;
+pub const API_MINOR: u16 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct ApiVersion {
@@ -129,6 +130,74 @@ pub struct MediaHealth {
     pub backends: Vec<BackendHealth>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeasonAvailabilityQuery {
+    pub media_id: i64,
+    pub season: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletenessStatus {
+    Complete,
+    Incomplete,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EpisodeReleaseStatus {
+    Aired,
+    Future,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EpisodePresence {
+    Available,
+    Missing,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct AvailabilitySeries {
+    pub media_id: String,
+    pub jellyfin_id: Option<String>,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct CompletenessSummary {
+    pub status: CompletenessStatus,
+    pub expected_count: u32,
+    pub available_count: u32,
+    pub missing_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct AvailabilityEpisode {
+    pub episode_id: String,
+    pub episode_number: u32,
+    pub title: String,
+    pub air_date: Option<NaiveDate>,
+    pub release_status: EpisodeReleaseStatus,
+    pub presence: EpisodePresence,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct SeasonAvailability {
+    pub series: AvailabilitySeries,
+    pub season: u32,
+    pub as_of: NaiveDate,
+    pub in_library: bool,
+    pub aired: CompletenessSummary,
+    pub announced: CompletenessSummary,
+    pub unknown_air_date_count: u32,
+    pub next_airing: Option<AvailabilityEpisode>,
+    pub episodes: Option<Vec<AvailabilityEpisode>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,7 +267,7 @@ mod tests {
 
         let value = serde_json::to_value(capabilities).unwrap();
         assert_eq!(value["api"]["major"], 1);
-        assert_eq!(value["api"]["minor"], 0);
+        assert_eq!(value["api"]["minor"], 1);
         assert_eq!(value["compatible_cli_major"], 1);
     }
 
@@ -212,5 +281,59 @@ mod tests {
     fn delete_download_query_defaults_to_preserving_files() {
         let query: DeleteDownloadQuery = serde_json::from_str("{}").unwrap();
         assert!(!query.delete_files);
+    }
+
+    #[test]
+    fn season_availability_contract_is_normalized_snake_case() {
+        let value = serde_json::to_value(SeasonAvailability {
+            series: AvailabilitySeries {
+                media_id: "60625".into(),
+                jellyfin_id: Some("series-1".into()),
+                title: "Rick and Morty".into(),
+            },
+            season: 3,
+            as_of: NaiveDate::from_ymd_opt(2026, 8, 20).unwrap(),
+            in_library: true,
+            aired: CompletenessSummary {
+                status: CompletenessStatus::Incomplete,
+                expected_count: 2,
+                available_count: 1,
+                missing_count: 1,
+            },
+            announced: CompletenessSummary {
+                status: CompletenessStatus::Incomplete,
+                expected_count: 3,
+                available_count: 2,
+                missing_count: 1,
+            },
+            unknown_air_date_count: 1,
+            next_airing: Some(AvailabilityEpisode {
+                episode_id: "303".into(),
+                episode_number: 3,
+                title: "Future".into(),
+                air_date: Some(NaiveDate::from_ymd_opt(2026, 8, 21).unwrap()),
+                release_status: EpisodeReleaseStatus::Future,
+                presence: EpisodePresence::Available,
+            }),
+            episodes: Some(vec![]),
+        })
+        .unwrap();
+
+        assert_eq!(value["as_of"], "2026-08-20");
+        assert_eq!(value["aired"]["status"], "incomplete");
+        assert_eq!(value["next_airing"]["release_status"], "future");
+        assert_eq!(value["next_airing"]["presence"], "available");
+        assert!(value.get("source").is_none());
+    }
+
+    #[test]
+    fn season_availability_query_rejects_unknown_fields() {
+        let error = serde_json::from_value::<SeasonAvailabilityQuery>(serde_json::json!({
+            "media_id": 60625,
+            "season": 3,
+            "backend": "jellyfin"
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
     }
 }
