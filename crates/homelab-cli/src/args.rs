@@ -54,6 +54,16 @@ fn parse_catalog_id(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
+fn parse_positive_media_id(value: &str) -> Result<i64, String> {
+    let value = value
+        .parse::<i64>()
+        .map_err(|_| "media ID must be a positive integer".to_owned())?;
+    if value <= 0 {
+        return Err("media ID must be a positive integer".to_owned());
+    }
+    Ok(value)
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Capabilities,
@@ -162,6 +172,12 @@ pub enum DownloadsCommand {
 pub enum LibraryCommand {
     Status,
     Refresh,
+    Availability {
+        #[arg(long, value_parser = parse_positive_media_id)]
+        media_id: i64,
+        #[arg(long)]
+        season: u32,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -206,6 +222,9 @@ impl MediaCommand {
             Self::Library { command } => match command {
                 LibraryCommand::Status => ("media.library.status", "read"),
                 LibraryCommand::Refresh => ("media.library.refresh", "write"),
+                LibraryCommand::Availability { .. } => {
+                    ("media.library.availability", "read")
+                }
             },
             Self::Sessions { .. } => ("media.sessions.list", "read"),
         }

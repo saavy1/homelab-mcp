@@ -24,6 +24,7 @@ enum Mode {
     Health(&'static str),
     Incompatible,
     ManySearch,
+    ManyAvailability,
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +167,9 @@ fn operation_for(method: &Method, path: &str) -> &'static str {
         (&Method::GET, "/api/v1/media/requests") => "media.requests.list",
         (&Method::GET, "/api/v1/media/downloads") => "media.downloads.list",
         (&Method::GET, "/api/v1/media/library/status") => "media.library.status",
+        (&Method::GET, "/api/v1/media/library/availability") => {
+            "media.library.availability"
+        }
         (&Method::POST, "/api/v1/media/library/refresh") => "media.library.refresh",
         (&Method::GET, "/api/v1/media/sessions") => "media.sessions.list",
         _ if path.ends_with("/approve") => "media.requests.approve",
@@ -212,6 +216,59 @@ fn normal_response(
         }]),
         (&Method::GET, "/api/v1/media/library/status") => {
             json!({"item_count": 3, "movie_count": 2, "series_count": 1})
+        }
+        (&Method::GET, "/api/v1/media/library/availability") => {
+            let many = matches!(mode, Mode::ManyAvailability);
+            json!({
+                "series": {
+                    "media_id": "60625",
+                    "jellyfin_id": if many { "jellyfin-series-raw-id" } else { "series-1" },
+                    "title": if many {
+                        "012345678901234567890123456789\n0123456789EXTRA"
+                    } else {
+                        "Rick and Morty"
+                    }
+                },
+                "season": 3,
+                "as_of": "2026-08-19",
+                "in_library": true,
+                "aired": {
+                    "status": "incomplete",
+                    "expected_count": 20,
+                    "available_count": 19,
+                    "missing_count": 1
+                },
+                "announced": {
+                    "status": "incomplete",
+                    "expected_count": 25,
+                    "available_count": 7,
+                    "missing_count": 18
+                },
+                "unknown_air_date_count": 0,
+                "next_airing": {
+                    "episode_id": "326",
+                    "episode_number": 26,
+                    "title": "Next Episode Must Stay Hidden",
+                    "air_date": "2026-08-26",
+                    "release_status": "future",
+                    "presence": "missing"
+                },
+                "episodes": if many {
+                    Value::Array((1..=25).map(|episode_number| json!({
+                        "episode_id": format!("3{episode_number:02}"),
+                        "episode_number": episode_number,
+                        "title": format!("Episode Title {episode_number}"),
+                        "air_date": format!("2026-08-{episode_number:02}"),
+                        "release_status": "aired",
+                        "presence": "missing",
+                        "api_key": "do-not-print",
+                        "backend_url": "https://user:password@example.invalid/raw",
+                        "raw_response": "raw-backend-payload"
+                    })).collect())
+                } else {
+                    Value::Null
+                }
+            })
         }
         (&Method::GET, "/api/v1/media/sessions") => {
             json!([{"id": "session-1", "user_name": "viewer", "item_name": "Alien"}])
@@ -326,9 +383,100 @@ async fn the_complete_curated_command_tree_is_available() {
         vec!["media", "downloads", "resume", "--download-id", "nzo-1"],
         vec!["media", "downloads", "retry", "--download-id", "nzo-1"],
         vec!["media", "library", "refresh"],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "0",
+        ],
     ] {
         assert_json_success(&run(&api, &args));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_help_lists_both_required_flags_without_http() {
+    let api = MockApi::spawn(Mode::Normal).await;
+    let output = run(
+        &api,
+        &["media", "library", "availability", "--help"],
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    let help = String::from_utf8(output.stdout).unwrap();
+    assert!(help.contains("--media-id <MEDIA_ID>"));
+    assert!(help.contains("--season <SEASON>"));
+    assert!(api.requests().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_emits_exact_json_and_get_query() {
+    let api = MockApi::spawn(Mode::Normal).await;
+    let body = assert_json_success(&run(
+        &api,
+        &[
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "3",
+        ],
+    ));
+
+    assert_eq!(body["operation"], "media.library.availability");
+    assert_eq!(body["risk"], "read");
+    assert_eq!(
+        body["data"],
+        json!({
+            "series": {
+                "media_id": "60625",
+                "jellyfin_id": "series-1",
+                "title": "Rick and Morty"
+            },
+            "season": 3,
+            "as_of": "2026-08-19",
+            "in_library": true,
+            "aired": {
+                "status": "incomplete",
+                "expected_count": 20,
+                "available_count": 19,
+                "missing_count": 1
+            },
+            "announced": {
+                "status": "incomplete",
+                "expected_count": 25,
+                "available_count": 7,
+                "missing_count": 18
+            },
+            "unknown_air_date_count": 0,
+            "next_airing": {
+                "episode_id": "326",
+                "episode_number": 26,
+                "title": "Next Episode Must Stay Hidden",
+                "air_date": "2026-08-26",
+                "release_status": "future",
+                "presence": "missing"
+            },
+            "episodes": null
+        })
+    );
+    let requests = api.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, Method::GET);
+    assert_eq!(
+        requests[0].uri,
+        "/api/v1/media/library/availability?media_id=60625&season=3"
+    );
+    assert_eq!(
+        requests[0].request_id.as_deref(),
+        body["request_id"].as_str()
+    );
+    assert!(requests[0].body.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -385,6 +533,77 @@ async fn invalid_arguments_exit_two_without_http_and_missing_config_is_structure
             "not-numeric",
             "--media-type",
             "tv",
+        ],
+        vec!["media", "library", "availability"],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--season",
+            "3",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "0",
+            "--season",
+            "3",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "-1",
+            "--season",
+            "3",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "9223372036854775808",
+            "--season",
+            "3",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "-1",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "4294967296",
+        ],
+        vec![
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "3",
+            "--media-type",
+            "movie",
         ],
     ] {
         let invalid = run(&api, &args);
@@ -484,6 +703,61 @@ async fn table_output_is_bounded_and_cannot_render_unknown_credentials() {
     assert!(!text.contains("api_key"));
     assert!(!text.contains("do-not-print"));
     assert!(serde_json::from_str::<Value>(&text).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn availability_table_is_one_bounded_redacted_summary_row() {
+    let api = MockApi::spawn(Mode::ManyAvailability).await;
+    let output = run(
+        &api,
+        &[
+            "--output",
+            "table",
+            "media",
+            "library",
+            "availability",
+            "--media-id",
+            "60625",
+            "--season",
+            "3",
+        ],
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    let lines = text.lines().collect::<Vec<_>>();
+    let header_index = lines
+        .iter()
+        .position(|line| line.starts_with("TITLE |"))
+        .unwrap();
+    assert_eq!(
+        &lines[header_index..],
+        &[
+            "TITLE | SEASON | IN_LIBRARY | AIRED | ANNOUNCED | AVAILABLE | EXPECTED | NEXT_AIRING",
+            "------|------|------|------|------|------|------|------",
+            "012345678901234567890123456789 012345678... | 3 | true | incomplete | incomplete | 7 | 25 | E26 2026-08-26",
+        ]
+    );
+    assert_eq!(lines[header_index + 2].split(" | ").count(), 8);
+    for forbidden in [
+        "Episode Title",
+        "Next Episode Must Stay Hidden",
+        "jellyfin-series-raw-id",
+        "api_key",
+        "do-not-print",
+        "https://",
+        "password",
+        "raw_response",
+        "raw-backend-payload",
+    ] {
+        assert!(!text.contains(forbidden), "leaked {forbidden}: {text}");
+    }
+    assert!(text.lines().count() <= 8, "table was not bounded: {text}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

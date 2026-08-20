@@ -8,7 +8,7 @@ use args::{
 use clap::{Parser, error::ErrorKind};
 use homelab_api_model::{
     CreateMediaRequest, DeleteDownloadQuery, HealthStatus, ItemDetailsQuery, ListDownloadsQuery,
-    ListRequestsQuery, MediaHealth, OperationEnvelope, SearchMediaQuery,
+    ListRequestsQuery, MediaHealth, OperationEnvelope, SearchMediaQuery, SeasonAvailabilityQuery,
 };
 use homelab_client::{ClientError, HomelabClient};
 use serde::Serialize;
@@ -296,6 +296,19 @@ async fn dispatch(
                     client.media().refresh_library(request_id).await,
                     "media.library.refresh",
                     "write",
+                    request_id,
+                    output,
+                ),
+                LibraryCommand::Availability { media_id, season } => complete(
+                    client
+                        .media()
+                        .season_availability(
+                            request_id,
+                            &SeasonAvailabilityQuery { media_id, season },
+                        )
+                        .await,
+                    "media.library.availability",
+                    "read",
                     request_id,
                     output,
                 ),

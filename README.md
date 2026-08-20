@@ -33,6 +33,18 @@ The model catalog server uses [rmcp](https://github.com/modelcontextprotocol/rus
 with streamable HTTP transport. The media API is available at `/api/v1`; set
 `HOMELAB_API_URL` to that base URL when using the `homelab` CLI.
 
+To check whether a TV season is complete, use the TV catalog ID returned by
+search as `--media-id`:
+
+```bash
+homelab media search --query "Rick and Morty"
+homelab media library availability --media-id 60625 --season 3
+```
+
+Season availability compares Jellyseerr episode announcements with episode
+presence in Jellyfin. Season `0` means specials. The availability operation is
+read-only.
+
 Build the homelab API image locally with:
 
 ```bash

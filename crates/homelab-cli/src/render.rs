@@ -52,6 +52,12 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
         return Ok(());
     }
 
+    if envelope.get("operation").and_then(Value::as_str)
+        == Some("media.library.availability")
+    {
+        return write_availability_table(writer, envelope);
+    }
+
     match envelope.get("data") {
         Some(Value::Array(rows)) => write_array(writer, rows),
         Some(Value::Object(fields)) => {
@@ -73,6 +79,44 @@ fn write_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
         Some(value) => writeln!(writer, "\n{}", cell(value)),
         None => Ok(()),
     }
+}
+
+fn write_availability_table(writer: &mut impl Write, envelope: &Value) -> io::Result<()> {
+    let missing = Value::Null;
+    let data = envelope.get("data").unwrap_or(&missing);
+    let next_airing = match (
+        data.pointer("/next_airing/episode_number"),
+        data.pointer("/next_airing/air_date"),
+    ) {
+        (Some(episode_number), Some(air_date)) if !air_date.is_null() => Value::String(format!(
+            "E{} {}",
+            cell(episode_number),
+            cell(air_date)
+        )),
+        _ => Value::Null,
+    };
+    let values = [
+        cell(data.pointer("/series/title").unwrap_or(&missing)),
+        cell(data.get("season").unwrap_or(&missing)),
+        cell(data.get("in_library").unwrap_or(&missing)),
+        cell(data.pointer("/aired/status").unwrap_or(&missing)),
+        cell(data.pointer("/announced/status").unwrap_or(&missing)),
+        cell(
+            data.pointer("/announced/available_count")
+                .unwrap_or(&missing),
+        ),
+        cell(
+            data.pointer("/announced/expected_count")
+                .unwrap_or(&missing),
+        ),
+        cell(&next_airing),
+    ];
+
+    writer.write_all(
+        b"\nTITLE | SEASON | IN_LIBRARY | AIRED | ANNOUNCED | AVAILABLE | EXPECTED | NEXT_AIRING\n",
+    )?;
+    writer.write_all(b"------|------|------|------|------|------|------|------\n")?;
+    writeln!(writer, "{}", values.join(" | "))
 }
 
 fn metadata_row(writer: &mut impl Write, label: &str, value: Option<&Value>) -> io::Result<()> {
