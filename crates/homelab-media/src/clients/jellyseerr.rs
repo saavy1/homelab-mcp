@@ -302,7 +302,7 @@ fn normalize_expected_season(
         let tmdb_id = episode
             .get("id")
             .and_then(scalar_string)
-            .filter(|id| !id.is_empty())
+            .filter(|id| !id.trim().is_empty())
             .ok_or_else(season_error)?;
         let episode_number = episode
             .get("episodeNumber")
@@ -590,6 +590,19 @@ mod tests {
             let error = normalization_error(details, season).await;
             assert_eq!(error.error_code(), ErrorCode::Internal, "{field}");
         }
+    }
+
+    #[tokio::test]
+    async fn expected_season_rejects_whitespace_only_episode_identity() {
+        let error = normalization_error(
+            valid_details(),
+            json!({"seasonNumber": 3, "episodes": [
+                {"id": " \t ", "episodeNumber": 1, "name": "A"}
+            ]}),
+        )
+        .await;
+
+        assert_eq!(error.error_code(), ErrorCode::Internal);
     }
 
     #[tokio::test]
