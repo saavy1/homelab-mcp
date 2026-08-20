@@ -36,12 +36,16 @@ pub enum MediaError {
     Transport(TransportError),
     #[error("{service} response could not be decoded", service = .0.service)]
     Serialization(SerializationError),
+    #[error("media records conflict")]
+    Conflict,
+    #[error("media normalized data is invalid")]
+    Internal,
 }
 
 impl MediaError {
     pub fn error_code(&self) -> ErrorCode {
         match self {
-            Self::Config(_) | Self::Serialization(_) => ErrorCode::Internal,
+            Self::Config(_) | Self::Serialization(_) | Self::Internal => ErrorCode::Internal,
             Self::Validation(_) => ErrorCode::Validation,
             Self::Upstream(error) => match error.status {
                 Some(401 | 403) => ErrorCode::Forbidden,
@@ -51,6 +55,7 @@ impl MediaError {
                 Some(500..=599) | None => ErrorCode::Unavailable,
                 Some(_) => ErrorCode::Unavailable,
             },
+            Self::Conflict => ErrorCode::Conflict,
             Self::Transport(error) if error.unknown_outcome => ErrorCode::UnknownOutcome,
             Self::Transport(error) if error.timeout => ErrorCode::Timeout,
             Self::Transport(_) => ErrorCode::Unavailable,
@@ -61,7 +66,11 @@ impl MediaError {
         match self {
             Self::Upstream(error) => error.retryable,
             Self::Transport(error) => error.retryable,
-            Self::Config(_) | Self::Validation(_) | Self::Serialization(_) => false,
+            Self::Config(_)
+            | Self::Validation(_)
+            | Self::Serialization(_)
+            | Self::Conflict
+            | Self::Internal => false,
         }
     }
 
@@ -69,6 +78,8 @@ impl MediaError {
         match self {
             Self::Config(_) => "media service configuration is invalid".into(),
             Self::Validation(message) => message.clone(),
+            Self::Conflict => "media records conflict".into(),
+            Self::Internal => "media backend returned invalid normalized data".into(),
             Self::Upstream(error) => match error.status {
                 Some(401 | 403) => format!("{} rejected the request", error.service),
                 Some(404) => format!("{} resource was not found", error.service),
